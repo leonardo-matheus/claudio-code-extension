@@ -388,20 +388,28 @@ Provide a concise summary in 2-4 paragraphs:`;
             if (i < startTruncateIdx) {
                 // Truncate old messages
                 if (msg.role === 'user' && Array.isArray(msg.content)) {
-                    // Tool results - truncate heavily
-                    const truncatedContent = msg.content.map((item: any) => {
-                        if (item.type === 'tool_result' && typeof item.content === 'string') {
-                            const content = item.content;
-                            if (content.length > 200) {
-                                return {
-                                    ...item,
-                                    content: content.substring(0, 200) + '... [truncated]'
-                                };
+                    // Remove images and truncate tool results in old messages
+                    const truncatedContent = msg.content
+                        .filter((item: any) => item.type !== 'image') // Remove images from old messages
+                        .map((item: any) => {
+                            if (item.type === 'tool_result' && typeof item.content === 'string') {
+                                const content = item.content;
+                                if (content.length > 200) {
+                                    return {
+                                        ...item,
+                                        content: content.substring(0, 200) + '... [truncated]'
+                                    };
+                                }
                             }
-                        }
-                        return item;
-                    });
-                    result.push({ role: 'user', content: truncatedContent });
+                            return item;
+                        });
+
+                    // If only images were removed, add a placeholder text
+                    if (truncatedContent.length === 0) {
+                        result.push({ role: 'user', content: '[Previous message contained images]' });
+                    } else {
+                        result.push({ role: 'user', content: truncatedContent });
+                    }
                 } else if (msg.role === 'assistant' && Array.isArray(msg.content)) {
                     // Keep assistant messages but truncate text
                     const truncatedContent = msg.content.map((block: any) => {
@@ -712,15 +720,24 @@ ${summary}
         let userContent: any;
         if (images && images.length > 0) {
             userContent = [
-                ...images.map(img => ({
-                    type: 'image',
-                    source: {
-                        type: 'base64',
-                        media_type: img.type,
-                        data: img.data
+                ...images.map(img => {
+                    // Clean base64 data - remove any whitespace/newlines
+                    const cleanData = img.data.replace(/\s/g, '');
+                    // Normalize media type
+                    let mediaType = img.type;
+                    if (!mediaType.startsWith('image/')) {
+                        mediaType = 'image/' + mediaType;
                     }
-                })),
-                { type: 'text', text: userMessage || 'What do you see in this image?' }
+                    return {
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            media_type: mediaType,
+                            data: cleanData
+                        }
+                    };
+                }),
+                { type: 'text', text: userMessage || 'Descreva esta imagem.' }
             ];
         } else {
             userContent = userMessage;
