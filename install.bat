@@ -25,19 +25,28 @@ echo.
 
 :: Get the directory where this script is located
 set "SCRIPT_DIR=%~dp0"
-set "VSIX_FILE=%SCRIPT_DIR%claudioai-1.0.0.vsix"
+set "VSIX_FILE=%SCRIPT_DIR%claudioai-latest.vsix"
+set "GITHUB_URL=https://github.com/gustavogouveia1/claudioai-vscode/releases/latest/download/claudioai-latest.vsix"
 
-:: Check if VSIX exists
+:: Check if VSIX exists locally, if not download it
 if not exist "%VSIX_FILE%" (
-    echo  [ERRO] Arquivo claudioai-1.0.0.vsix nao encontrado!
-    echo  Certifique-se que o arquivo .vsix esta na mesma pasta.
+    echo  [..] Arquivo VSIX nao encontrado localmente
+    echo  [..] Baixando do GitHub...
     echo.
-    pause
-    exit /b 1
+    powershell -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%GITHUB_URL%' -OutFile '%VSIX_FILE%' -UseBasicParsing; Write-Host '  [OK] Download concluido' } catch { Write-Host '  [ERRO] Falha no download:' $_.Exception.Message; exit 1 }"
+    if %errorlevel% neq 0 (
+        echo.
+        echo  Verifique sua conexao com a internet.
+        echo.
+        pause
+        exit /b 1
+    )
+    echo.
+) else (
+    echo  [OK] Arquivo VSIX encontrado
+    echo.
 )
 
-echo  [OK] Arquivo VSIX encontrado
-echo.
 echo  Instalando ClaudioAI...
 echo.
 
@@ -52,7 +61,7 @@ if %errorlevel% equ 0 (
     echo.
     echo  Reinicie o VS Code para usar o ClaudioAI.
     echo.
-    echo  Acesse: View ^> ClaudioAI (na barra lateral)
+    echo  Acesso: View ^> ClaudioAI (na barra lateral)
     echo.
 ) else (
     echo.

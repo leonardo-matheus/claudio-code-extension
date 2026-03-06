@@ -10,7 +10,7 @@ Write-Host "  ========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Configuration
-$VSIX_NAME = "claudioai-1.0.0.vsix"
+$VSIX_NAME = "claudioai-latest.vsix"
 $GITHUB_RELEASE_URL = "https://github.com/gustavogouveia1/claudioai-vscode/releases/latest/download/$VSIX_NAME"
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VSIX_LOCAL = Join-Path $SCRIPT_DIR $VSIX_NAME
