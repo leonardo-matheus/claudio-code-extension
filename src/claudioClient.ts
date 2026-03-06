@@ -153,45 +153,151 @@ export class ClaudioClient {
         this.totalOutputTokens = output;
     }
 
-    forceCompact(): { success: boolean; message: string } {
-        // Need at least 6 messages to compact (keeps 5: first 2 + summary + last 2)
+    async forceCompact(onProgress?: (status: string) => void): Promise<{ success: boolean; message: string; summary?: string }> {
+        // Need at least 6 messages to compact
         if (this.messages.length <= 5) {
             console.log('ClaudioAI: Not enough messages to compact');
             return { success: false, message: 'Not enough messages to compact (minimum 6 required)' };
         }
 
-        console.log('ClaudioAI: Manual compaction triggered');
-
+        console.log('ClaudioAI: Smart compaction triggered');
+        const config = this.getConfig();
         const previousCount = this.messages.length;
-
-        // Keep first 2 messages and last 2 messages
-        const firstMessages = this.messages.slice(0, 2);
-        const lastMessages = this.messages.slice(-2);
-
-        const summaryMsg: Message = {
-            role: 'user',
-            content: '[System: Chat history was manually compacted. Recent context preserved.]'
-        };
-
-        this.messages = [...firstMessages, summaryMsg, ...lastMessages];
-
-        // Reset token counts (estimate)
         const previousTokens = this.totalInputTokens + this.totalOutputTokens;
-        this.totalInputTokens = Math.floor(this.totalInputTokens * 0.3);
-        this.totalOutputTokens = Math.floor(this.totalOutputTokens * 0.3);
-        const newTokens = this.totalInputTokens + this.totalOutputTokens;
 
-        if (this.onTokenUpdate) {
-            this.onTokenUpdate(this.getTokenUsage());
+        onProgress?.('Analyzing conversation...');
+
+        // Get messages to summarize (all except last 4)
+        const messagesToSummarize = this.messages.slice(0, -4);
+        const recentMessages = this.messages.slice(-4);
+
+        // Build conversation text for summary
+        const conversationText = messagesToSummarize.map(msg => {
+            if (msg.role === 'user') {
+                if (typeof msg.content === 'string') {
+                    return `User: ${msg.content}`;
+                } else if (Array.isArray(msg.content)) {
+                    const text = msg.content
+                        .filter((c: any) => c.type === 'tool_result')
+                        .map((c: any) => `[Tool Result: ${String(c.content).substring(0, 100)}...]`)
+                        .join('\n');
+                    return text || '[Tool Results]';
+                }
+            } else if (msg.role === 'assistant') {
+                if (Array.isArray(msg.content)) {
+                    const parts: string[] = [];
+                    msg.content.forEach((block: any) => {
+                        if (block.type === 'text') parts.push(block.text);
+                        if (block.type === 'tool_use') parts.push(`[Used tool: ${block.name}]`);
+                    });
+                    return `Assistant: ${parts.join(' ')}`;
+                }
+            }
+            return '';
+        }).filter(Boolean).join('\n\n');
+
+        onProgress?.('Generating intelligent summary...');
+
+        try {
+            // Request summary from AI
+            const summaryResponse = await this.requestSummary(config, conversationText);
+
+            onProgress?.('Rebuilding context...');
+
+            // Create the compacted history
+            const summaryMsg: Message = {
+                role: 'user',
+                content: `[Conversation Summary]\n${summaryResponse}\n[End of Summary - Recent messages follow]`
+            };
+
+            const assistantAck: Message = {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'I understand the context from the summary. Continuing from where we left off.' }]
+            };
+
+            this.messages = [summaryMsg, assistantAck, ...recentMessages];
+
+            // Update token counts (estimate ~60% reduction)
+            this.totalInputTokens = Math.floor(this.totalInputTokens * 0.4);
+            this.totalOutputTokens = Math.floor(this.totalOutputTokens * 0.4);
+
+            if (this.onTokenUpdate) {
+                this.onTokenUpdate(this.getTokenUsage());
+            }
+
+            const removedMessages = previousCount - this.messages.length;
+            const savedTokens = previousTokens - (this.totalInputTokens + this.totalOutputTokens);
+
+            return {
+                success: true,
+                message: `Compacted ${removedMessages} messages, saved ~${savedTokens.toLocaleString()} tokens`,
+                summary: summaryResponse
+            };
+        } catch (error) {
+            console.error('ClaudioAI: Compaction failed', error);
+            return {
+                success: false,
+                message: `Compaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            };
         }
+    }
 
-        const removedMessages = previousCount - this.messages.length;
-        const savedTokens = previousTokens - newTokens;
+    private requestSummary(config: any, conversationText: string): Promise<string> {
+        const summaryPrompt = `Summarize this conversation concisely. Include:
+- Main topics discussed
+- Key decisions made
+- Files created/modified (if any)
+- Current task status
+- Important context for continuing
 
-        return {
-            success: true,
-            message: `Compacted: removed ${removedMessages} messages, saved ~${savedTokens.toLocaleString()} tokens`
-        };
+Conversation:
+${conversationText.substring(0, 8000)}
+
+Provide a concise summary in 2-4 paragraphs:`;
+
+        const body = JSON.stringify({
+            model: config.model,
+            max_tokens: 1024,
+            messages: [{ role: 'user', content: summaryPrompt }]
+        });
+
+        return new Promise((resolve, reject) => {
+            const url = new URL(config.apiUrl + '/v1/messages');
+            const lib = url.protocol === 'https:' ? https : http;
+
+            const req = lib.request({
+                hostname: url.hostname,
+                port: url.port || (url.protocol === 'https:' ? 443 : 80),
+                path: url.pathname,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': config.apiKey,
+                    'anthropic-version': '2023-06-01'
+                }
+            }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(data);
+                        if (json.content && json.content[0]?.text) {
+                            resolve(json.content[0].text);
+                        } else if (json.error) {
+                            reject(new Error(json.error.message));
+                        } else {
+                            reject(new Error('Invalid response'));
+                        }
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+
+            req.on('error', reject);
+            req.write(body);
+            req.end();
+        });
     }
 
     private compactHistory(): boolean {

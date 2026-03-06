@@ -164,12 +164,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     this.sendChatList();
                     break;
                 case 'compactChat':
-                    const result = this._client.forceCompact();
+                    this._view?.webview.postMessage({ type: 'compactStart' });
+                    const result = await this._client.forceCompact((status) => {
+                        this._view?.webview.postMessage({ type: 'compactProgress', status });
+                    });
                     this._view?.webview.postMessage({ type: 'tokenUpdate', tokens: this._client.getTokenUsage() });
                     this._view?.webview.postMessage({
                         type: 'compactResult',
                         success: result.success,
-                        message: result.message
+                        message: result.message,
+                        summary: result.summary
                     });
                     if (result.success) {
                         await this.saveCurrentChat();
@@ -883,6 +887,170 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         pre code { padding: 0; background: transparent; color: var(--text-primary); }
+
+        /* Compact Modal */
+        .compact-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .compact-overlay.visible { display: flex; }
+
+        .compact-modal {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 0 60px rgba(99, 102, 241, 0.3);
+            animation: scaleIn 0.3s ease;
+        }
+
+        @keyframes scaleIn {
+            from { transform: scale(0.9); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .compact-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .compact-icon {
+            width: 48px;
+            height: 48px;
+            background: var(--accent-gradient);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            animation: pulse 2s infinite;
+        }
+
+        .compact-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .compact-status {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .compact-progress {
+            height: 4px;
+            background: rgba(99, 102, 241, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 16px 0;
+        }
+
+        .compact-progress-bar {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 2px;
+            animation: progress 2s ease-in-out infinite;
+        }
+
+        @keyframes progress {
+            0% { width: 0%; margin-left: 0%; }
+            50% { width: 60%; margin-left: 20%; }
+            100% { width: 0%; margin-left: 100%; }
+        }
+
+        .compact-dots {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+            margin: 16px 0;
+        }
+
+        .compact-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--glow-color);
+            border-radius: 50%;
+            animation: bounce 1.4s ease-in-out infinite;
+        }
+
+        .compact-dot:nth-child(2) { animation-delay: 0.2s; }
+        .compact-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+        }
+
+        /* Summary Card */
+        .summary-card {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.05) 100%);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 12px 0;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-10px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .summary-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--glow-color);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .summary-content {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+        }
+
+        .summary-stats {
+            display: flex;
+            gap: 16px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .summary-stat {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .summary-stat .value {
+            color: #22c55e;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -933,6 +1101,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 <div class="thinking-dot"></div>
             </div>
             <span>Thinking...</span>
+        </div>
+    </div>
+
+    <div class="compact-overlay" id="compactOverlay">
+        <div class="compact-modal">
+            <div class="compact-header">
+                <div class="compact-icon">🗜️</div>
+                <div>
+                    <div class="compact-title">Compacting Chat</div>
+                    <div class="compact-status" id="compactStatus">Initializing...</div>
+                </div>
+            </div>
+            <div class="compact-progress">
+                <div class="compact-progress-bar"></div>
+            </div>
+            <div class="compact-dots">
+                <div class="compact-dot"></div>
+                <div class="compact-dot"></div>
+                <div class="compact-dot"></div>
+            </div>
         </div>
     </div>
 
@@ -1024,14 +1212,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
 
         const compactBtn = document.getElementById('compactBtn');
+        const compactOverlay = document.getElementById('compactOverlay');
+        const compactStatus = document.getElementById('compactStatus');
+
         compactBtn?.addEventListener('click', () => {
-            compactBtn.textContent = '⏳';
             compactBtn.disabled = true;
             vscode.postMessage({ type: 'compactChat' });
-            setTimeout(() => {
-                compactBtn.textContent = '🗜️';
-                compactBtn.disabled = false;
-            }, 500);
         });
 
         function esc(str) {
@@ -1204,16 +1390,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     });
                     updateTokens(msg.tokens);
                     break;
+                case 'compactStart':
+                    compactOverlay.classList.add('visible');
+                    compactStatus.textContent = 'Initializing...';
+                    break;
+
+                case 'compactProgress':
+                    compactStatus.textContent = msg.status;
+                    break;
+
                 case 'compactResult':
+                    compactOverlay.classList.remove('visible');
+                    compactBtn.disabled = false;
+
                     if (msg.success) {
-                        addMessage('assistant', '🗜️ ' + msg.message);
-                        // Flash token bar to show change
+                        // Show summary card
+                        const summaryHtml =
+                            '<div class="summary-card">' +
+                            '<div class="summary-header">📋 Conversation Summary</div>' +
+                            '<div class="summary-content">' + esc(msg.summary || '') + '</div>' +
+                            '<div class="summary-stats">' +
+                            '<div class="summary-stat"><span class="value">✓</span> ' + msg.message + '</div>' +
+                            '</div></div>';
+
+                        const div = document.createElement('div');
+                        div.className = 'message assistant';
+                        div.innerHTML = '<div class="message-header assistant">🗜️ COMPACTED</div>' + summaryHtml;
+                        chat.appendChild(div);
+                        chat.scrollTop = chat.scrollHeight;
+
+                        // Flash token bar
                         tokenFill.style.transition = 'none';
                         tokenFill.style.background = '#22c55e';
                         setTimeout(() => {
                             tokenFill.style.transition = 'all 0.5s ease';
                             tokenFill.style.background = '';
-                        }, 200);
+                        }, 300);
                     } else {
                         addMessage('error', '⚠️ ' + msg.message);
                     }
