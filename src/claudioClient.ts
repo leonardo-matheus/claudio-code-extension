@@ -23,10 +23,14 @@ export interface PlanFile {
 }
 
 export interface TokenUsage {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    percentUsed: number;
+    inputTokens: number;      // Current context size
+    outputTokens: number;     // Current output
+    cacheReadTokens: number;  // Tokens read from cache
+    totalTokens: number;      // Current total (input + output)
+    percentUsed: number;      // % of 200K context
+    // Billing totals (accumulated)
+    billingInput: number;
+    billingOutput: number;
 }
 
 const MAX_CONTEXT_TOKENS = 200000; // Claude's context window
@@ -110,9 +114,13 @@ export class ClaudioClient {
     private mode: AgentMode = { autoEdit: true, planMode: false, bypass: false };
     private backgroundProcesses: Map<string, ChildProcess> = new Map();
 
-    // Token tracking
-    private totalInputTokens: number = 0;
-    private totalOutputTokens: number = 0;
+    // Token tracking - current context (not accumulated)
+    private currentInputTokens: number = 0;
+    private currentOutputTokens: number = 0;
+    private currentCacheReadTokens: number = 0;
+    // Billing totals (accumulated across all calls)
+    private billingInputTokens: number = 0;
+    private billingOutputTokens: number = 0;
 
     // Callbacks
     public onToolStart?: (name: string, params: any) => void;
@@ -133,8 +141,11 @@ export class ClaudioClient {
 
     clearHistory() {
         this.messages = [];
-        this.totalInputTokens = 0;
-        this.totalOutputTokens = 0;
+        this.currentInputTokens = 0;
+        this.currentOutputTokens = 0;
+        this.currentCacheReadTokens = 0;
+        this.billingInputTokens = 0;
+        this.billingOutputTokens = 0;
     }
 
     getMessages(): Message[] {
@@ -146,18 +157,23 @@ export class ClaudioClient {
     }
 
     getTokenUsage(): TokenUsage {
-        const total = this.totalInputTokens + this.totalOutputTokens;
+        const total = this.currentInputTokens + this.currentOutputTokens;
         return {
-            inputTokens: this.totalInputTokens,
-            outputTokens: this.totalOutputTokens,
+            inputTokens: this.currentInputTokens,
+            outputTokens: this.currentOutputTokens,
+            cacheReadTokens: this.currentCacheReadTokens,
             totalTokens: total,
-            percentUsed: Math.round((total / MAX_CONTEXT_TOKENS) * 100)
+            percentUsed: Math.round((this.currentInputTokens / MAX_CONTEXT_TOKENS) * 100),
+            billingInput: this.billingInputTokens,
+            billingOutput: this.billingOutputTokens
         };
     }
 
     setTokens(input: number, output: number) {
-        this.totalInputTokens = input;
-        this.totalOutputTokens = output;
+        this.currentInputTokens = input;
+        this.currentOutputTokens = output;
+        this.billingInputTokens = input;
+        this.billingOutputTokens = output;
     }
 
     async forceCompact(onProgress?: (status: string) => void): Promise<{ success: boolean; message: string; summary?: string }> {
@@ -170,7 +186,7 @@ export class ClaudioClient {
         console.log('ClaudioAI: Smart compaction triggered');
         const config = this.getConfig();
         const previousCount = this.messages.length;
-        const previousTokens = this.totalInputTokens + this.totalOutputTokens;
+        const previousTokens = this.currentInputTokens;
 
         onProgress?.('Analyzing conversation...');
 
@@ -224,16 +240,15 @@ export class ClaudioClient {
 
             this.messages = [summaryMsg, assistantAck, ...recentMessages];
 
-            // Update token counts (estimate ~60% reduction)
-            this.totalInputTokens = Math.floor(this.totalInputTokens * 0.4);
-            this.totalOutputTokens = Math.floor(this.totalOutputTokens * 0.4);
+            // Estimate new token count (~40% of previous after compaction)
+            this.currentInputTokens = Math.floor(this.currentInputTokens * 0.4);
 
             if (this.onTokenUpdate) {
                 this.onTokenUpdate(this.getTokenUsage());
             }
 
             const removedMessages = previousCount - this.messages.length;
-            const savedTokens = previousTokens - (this.totalInputTokens + this.totalOutputTokens);
+            const savedTokens = previousTokens - this.currentInputTokens;
 
             return {
                 success: true,
@@ -326,8 +341,7 @@ Provide a concise summary in 2-4 paragraphs:`;
             this.messages = [...firstMessages, summaryMsg, ...lastMessages];
 
             // Reduce token count estimate
-            this.totalInputTokens = Math.floor(this.totalInputTokens * 0.4);
-            this.totalOutputTokens = Math.floor(this.totalOutputTokens * 0.4);
+            this.currentInputTokens = Math.floor(this.currentInputTokens * 0.4);
 
             if (this.onTokenUpdate) {
                 this.onTokenUpdate(this.getTokenUsage());
@@ -697,19 +711,23 @@ ${summary}
 
             console.log(`ClaudioAI: Response stop_reason=${response.stop_reason}`);
 
-            // Update token usage (account for cache hits)
+            // Update token usage
             if (response.usage) {
-                const inputDelta = response.usage.input_tokens || 0;
-                const outputDelta = response.usage.output_tokens || 0;
+                const inputTokens = response.usage.input_tokens || 0;
+                const outputTokens = response.usage.output_tokens || 0;
                 const cacheRead = response.usage.cache_read_input_tokens || 0;
-                const cacheCreation = response.usage.cache_creation_input_tokens || 0;
 
-                // Only count non-cached input tokens for billing estimate
-                const effectiveInput = inputDelta - cacheRead;
-                this.totalInputTokens += effectiveInput;
-                this.totalOutputTokens += outputDelta;
+                // Current context = this request's tokens (NOT accumulated)
+                this.currentInputTokens = inputTokens;
+                this.currentOutputTokens = outputTokens;
+                this.currentCacheReadTokens = cacheRead;
 
-                console.log(`ClaudioAI Tokens: +${effectiveInput} in (${cacheRead} cached), +${outputDelta} out | Total: ${this.totalInputTokens} in, ${this.totalOutputTokens} out`);
+                // Billing = accumulated across all API calls
+                this.billingInputTokens += inputTokens;
+                this.billingOutputTokens += outputTokens;
+
+                const percentUsed = Math.round((inputTokens / MAX_CONTEXT_TOKENS) * 100);
+                console.log(`ClaudioAI Context: ${inputTokens.toLocaleString()} in, ${outputTokens.toLocaleString()} out (${percentUsed}% of 200K) | Cache: ${cacheRead.toLocaleString()} read`);
 
                 if (this.onTokenUpdate) {
                     this.onTokenUpdate(this.getTokenUsage());
