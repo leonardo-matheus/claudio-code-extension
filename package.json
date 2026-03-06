@@ -1,0 +1,170 @@
+{
+  "name": "claudioai",
+  "displayName": "ClaudioAI",
+  "description": "AI assistant powered by Claude - Chat, code generation, and more",
+  "version": "1.0.0",
+  "publisher": "claudioai",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "claude",
+    "copilot",
+    "chat",
+    "code generation"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudioai-sidebar",
+          "title": "ClaudioAI",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudioai-sidebar": [
+        {
+          "type": "webview",
+          "id": "claudioai.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudioai.openChat",
+        "title": "Open ClaudioAI Chat",
+        "category": "ClaudioAI"
+      },
+      {
+        "command": "claudioai.newChat",
+        "title": "New Chat",
+        "category": "ClaudioAI",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudioai.explainCode",
+        "title": "Explain Code",
+        "category": "ClaudioAI"
+      },
+      {
+        "command": "claudioai.refactorCode",
+        "title": "Refactor Code",
+        "category": "ClaudioAI"
+      },
+      {
+        "command": "claudioai.fixCode",
+        "title": "Fix Code",
+        "category": "ClaudioAI"
+      },
+      {
+        "command": "claudioai.generateTests",
+        "title": "Generate Tests",
+        "category": "ClaudioAI"
+      },
+      {
+        "command": "claudioai.addDocumentation",
+        "title": "Add Documentation",
+        "category": "ClaudioAI"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "claudioai.submenu",
+          "group": "claudioai"
+        }
+      ],
+      "claudioai.submenu": [
+        {
+          "command": "claudioai.explainCode",
+          "group": "1_actions"
+        },
+        {
+          "command": "claudioai.refactorCode",
+          "group": "1_actions"
+        },
+        {
+          "command": "claudioai.fixCode",
+          "group": "1_actions"
+        },
+        {
+          "command": "claudioai.generateTests",
+          "group": "2_generate"
+        },
+        {
+          "command": "claudioai.addDocumentation",
+          "group": "2_generate"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "claudioai.newChat",
+          "when": "view == claudioai.chatView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "claudioai.submenu",
+        "label": "ClaudioAI"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudioai.openChat",
+        "key": "ctrl+shift+c",
+        "mac": "cmd+shift+c"
+      }
+    ],
+    "configuration": {
+      "title": "ClaudioAI",
+      "properties": {
+        "claudioai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key for ClaudioAI"
+        },
+        "claudioai.apiUrl": {
+          "type": "string",
+          "default": "https://claudioai.dev",
+          "description": "API URL for ClaudioAI"
+        },
+        "claudioai.model": {
+          "type": "string",
+          "default": "claude-opus-4-5",
+          "description": "Model to use"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "marked": "^11.0.0"
+  }
+}
