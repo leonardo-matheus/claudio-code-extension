@@ -6,6 +6,7 @@ let chatViewProvider: ChatViewProvider;
 
 export function activate(context: vscode.ExtensionContext) {
     const client = new ClaudioClient();
+    client.setExtensionPath(context.extensionPath);
     chatViewProvider = new ChatViewProvider(context.extensionUri, client, context);
 
     context.subscriptions.push(

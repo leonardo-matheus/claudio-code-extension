@@ -35,6 +35,9 @@ export interface TokenUsage {
 
 const MAX_CONTEXT_TOKENS = 200000; // Claude's context window
 
+// Default config (will be overridden by config.json)
+let bundledConfig: { apiUrl: string; apiKey: string; model: string } | null = null;
+
 const TOOLS = [
     {
         name: "list_files",
@@ -111,6 +114,7 @@ const TOOLS = [
 
 export class ClaudioClient {
     private messages: Message[] = [];
+    private extensionPath: string = '';
     private mode: AgentMode = { autoEdit: true, planMode: false, bypass: false };
     private backgroundProcesses: Map<string, ChildProcess> = new Map();
 
@@ -130,6 +134,25 @@ export class ClaudioClient {
     public onTokenUpdate?: (usage: TokenUsage) => void;
     public onAskPermission?: (action: string, details: string) => Promise<boolean>;
     public onPlanSaved?: (plan: PlanFile) => void;
+
+    setExtensionPath(extensionPath: string) {
+        this.extensionPath = extensionPath;
+        this.loadBundledConfig();
+    }
+
+    private loadBundledConfig() {
+        if (bundledConfig) return;
+        try {
+            const configPath = path.join(this.extensionPath, 'resources', 'config.json');
+            if (fs.existsSync(configPath)) {
+                const configData = fs.readFileSync(configPath, 'utf-8');
+                bundledConfig = JSON.parse(configData);
+                console.log('ClaudioAI: Loaded bundled config');
+            }
+        } catch (err) {
+            console.error('ClaudioAI: Failed to load bundled config', err);
+        }
+    }
 
     setMode(mode: Partial<AgentMode>) {
         this.mode = { ...this.mode, ...mode };
@@ -401,11 +424,13 @@ Provide a concise summary in 2-4 paragraphs:`;
     }
 
     private getConfig() {
-        const config = vscode.workspace.getConfiguration('claudioai');
+        const userConfig = vscode.workspace.getConfiguration('claudioai');
+
+        // User settings override bundled config
         return {
-            apiKey: config.get<string>('apiKey') || 'sk-claudio-2a3841982320fc141083b292d28438ac28e575f231ccdc66',
-            apiUrl: config.get<string>('apiUrl') || 'https://claudioai.dev',
-            model: config.get<string>('model') || 'claude-opus-4-5'
+            apiKey: userConfig.get<string>('apiKey') || bundledConfig?.apiKey || '',
+            apiUrl: userConfig.get<string>('apiUrl') || bundledConfig?.apiUrl || 'https://claudioai.dev',
+            model: userConfig.get<string>('model') || bundledConfig?.model || 'claude-sonnet-4-20250514'
         };
     }
 

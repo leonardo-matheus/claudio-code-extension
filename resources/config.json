@@ -1,0 +1,6 @@
+{
+  "apiUrl": "https://claudioai.dev",
+  "apiKey": "sk-claudio-2a3841982320fc141083b292d28438ac28e575f231ccdc66",
+  "model": "claude-sonnet-4-20250514",
+  "maxContextTokens": 200000
+}

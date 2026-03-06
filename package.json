@@ -137,17 +137,19 @@
         "claudioai.apiKey": {
           "type": "string",
           "default": "",
-          "description": "API Key for ClaudioAI"
+          "description": "Custom API Key (optional - uses built-in key if empty)"
         },
         "claudioai.apiUrl": {
           "type": "string",
-          "default": "https://claudioai.dev",
-          "description": "API URL for ClaudioAI"
+          "default": "",
+          "description": "Custom API URL (optional)"
         },
         "claudioai.model": {
           "type": "string",
-          "default": "claude-opus-4-5",
-          "description": "Model to use"
+          "default": "",
+          "enum": ["", "claude-sonnet-4-20250514", "claude-opus-4-5", "claude-haiku-4-5-20251001"],
+          "enumDescriptions": ["Default", "Claude Sonnet 4", "Claude Opus 4.5", "Claude Haiku 4.5"],
+          "description": "Model to use (optional)"
         }
       }
     }
