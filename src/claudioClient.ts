@@ -724,11 +724,18 @@ ${summary}
                 ...images.map((img, idx) => {
                     // Clean base64 data - remove any whitespace/newlines
                     const cleanData = img.data.replace(/\s/g, '');
-                    // Normalize media type
-                    let mediaType = img.type;
-                    if (!mediaType.startsWith('image/')) {
-                        mediaType = 'image/' + mediaType;
+
+                    // Normalize media type - API only accepts: image/jpeg, image/png, image/gif, image/webp
+                    let mediaType = img.type.toLowerCase();
+                    if (mediaType === 'image/jpg') {
+                        mediaType = 'image/jpeg';
                     }
+                    // Ensure it's a valid type
+                    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                    if (!validTypes.includes(mediaType)) {
+                        mediaType = 'image/png'; // Default to PNG
+                    }
+
                     console.log(`ClaudioAI: Image ${idx + 1} - type: ${mediaType}, data length: ${cleanData.length}`);
                     return {
                         type: 'image',
