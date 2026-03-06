@@ -153,13 +153,15 @@ export class ClaudioClient {
         this.totalOutputTokens = output;
     }
 
-    forceCompact() {
+    forceCompact(): { success: boolean; message: string } {
         if (this.messages.length <= 4) {
             console.log('ClaudioAI: Not enough messages to compact');
-            return;
+            return { success: false, message: 'Not enough messages to compact (minimum 5 required)' };
         }
 
         console.log('ClaudioAI: Manual compaction triggered');
+
+        const previousCount = this.messages.length;
 
         // Keep first 2 messages and last 2 messages
         const firstMessages = this.messages.slice(0, 2);
@@ -173,42 +175,54 @@ export class ClaudioClient {
         this.messages = [...firstMessages, summaryMsg, ...lastMessages];
 
         // Reset token counts (estimate)
+        const previousTokens = this.totalInputTokens + this.totalOutputTokens;
         this.totalInputTokens = Math.floor(this.totalInputTokens * 0.3);
         this.totalOutputTokens = Math.floor(this.totalOutputTokens * 0.3);
+        const newTokens = this.totalInputTokens + this.totalOutputTokens;
 
         if (this.onTokenUpdate) {
             this.onTokenUpdate(this.getTokenUsage());
         }
+
+        const removedMessages = previousCount - this.messages.length;
+        const savedTokens = previousTokens - newTokens;
+
+        return {
+            success: true,
+            message: `Compacted: removed ${removedMessages} messages, saved ~${savedTokens.toLocaleString()} tokens`
+        };
     }
 
-    private compactHistory() {
+    private compactHistory(): boolean {
         const usage = this.getTokenUsage();
 
         // Compact when reaching 90% of context
         if (usage.percentUsed >= 90 && this.messages.length > 6) {
-            console.log('ClaudioAI: Compacting chat history...');
+            console.log('ClaudioAI: Auto-compacting chat history (90% context used)');
 
             // Keep first 2 messages (initial context) and last 4 messages (recent context)
             const firstMessages = this.messages.slice(0, 2);
             const lastMessages = this.messages.slice(-4);
 
-            // Create a summary message
             const summaryMsg: Message = {
                 role: 'user',
-                content: '[System: Previous conversation was compacted to save context. Recent messages preserved.]'
+                content: '[System: Previous conversation was auto-compacted to save context. Recent messages preserved.]'
             };
 
             this.messages = [...firstMessages, summaryMsg, ...lastMessages];
 
-            // Reduce token count estimate (rough approximation)
+            // Reduce token count estimate
             this.totalInputTokens = Math.floor(this.totalInputTokens * 0.4);
             this.totalOutputTokens = Math.floor(this.totalOutputTokens * 0.4);
 
-            // Notify about compaction
             if (this.onTokenUpdate) {
                 this.onTokenUpdate(this.getTokenUsage());
             }
+
+            return true;
         }
+
+        return false;
     }
 
     private optimizeMessages(): Message[] {

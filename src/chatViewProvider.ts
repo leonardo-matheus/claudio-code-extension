@@ -164,10 +164,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     this.sendChatList();
                     break;
                 case 'compactChat':
-                    this._client.forceCompact();
+                    const result = this._client.forceCompact();
                     this._view?.webview.postMessage({ type: 'tokenUpdate', tokens: this._client.getTokenUsage() });
-                    this._view?.webview.postMessage({ type: 'compacted' });
-                    await this.saveCurrentChat();
+                    this._view?.webview.postMessage({
+                        type: 'compactResult',
+                        success: result.success,
+                        message: result.message
+                    });
+                    if (result.success) {
+                        await this.saveCurrentChat();
+                    }
                     break;
             }
         });
@@ -1188,8 +1194,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     });
                     updateTokens(msg.tokens);
                     break;
-                case 'compacted':
-                    addMessage('assistant', '🗜️ Chat compactado! Histórico antigo foi resumido para economizar tokens.');
+                case 'compactResult':
+                    if (msg.success) {
+                        addMessage('assistant', '🗜️ ' + msg.message);
+                    } else {
+                        addMessage('error', '⚠️ ' + msg.message);
+                    }
                     break;
             }
         });
