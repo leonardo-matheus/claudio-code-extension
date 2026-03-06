@@ -627,15 +627,32 @@ Provide a concise summary in 2-4 paragraphs:`;
                 return lastTextContent;
             }
 
-            // In plan mode, just describe but don't execute
-            if (this.mode.planMode) {
-                return lastTextContent + '\n\n[Plan Mode: Tools not executed]';
-            }
-
-            // Execute tools
+            // Execute tools (with plan mode restrictions)
             const toolResults: any[] = [];
+            const readOnlyTools = ['list_files', 'read_file', 'search_files'];
+
             for (const tool of toolCalls) {
-                console.log(`ClaudioAI: Executing tool ${tool.name}`);
+                console.log(`ClaudioAI: Tool requested: ${tool.name}`);
+
+                // In plan mode, only allow read-only tools
+                if (this.mode.planMode && !readOnlyTools.includes(tool.name)) {
+                    console.log(`ClaudioAI: Plan mode - blocking ${tool.name}`);
+
+                    if (this.onToolStart) {
+                        this.onToolStart(tool.name, tool.input);
+                    }
+
+                    if (this.onToolEnd) {
+                        this.onToolEnd(tool.name, `[Plan Mode] Would execute: ${tool.name}`, true);
+                    }
+
+                    toolResults.push({
+                        type: "tool_result",
+                        tool_use_id: tool.id,
+                        content: `[Plan Mode] This action would be executed: ${tool.name} with params: ${JSON.stringify(tool.input)}`
+                    });
+                    continue;
+                }
 
                 if (this.onToolStart) {
                     this.onToolStart(tool.name, tool.input);
@@ -662,7 +679,19 @@ Provide a concise summary in 2-4 paragraphs:`;
     }
 
     private makeRequest(config: any): Promise<any> {
-        // System prompt with cache control for efficiency
+        // Build system prompt based on mode
+        let modeInstructions = '';
+        if (this.mode.planMode) {
+            modeInstructions = `
+
+MODE: PLAN MODE (Active)
+- You CAN use read-only tools: list_files, read_file, search_files
+- You CANNOT execute: write_file, edit_file, run_command (will be simulated)
+- Analyze the codebase and create a detailed step-by-step plan
+- Explain what changes you WOULD make and why
+- Be specific about files and code modifications`;
+        }
+
         const systemPrompt = [
             {
                 type: "text",
@@ -671,7 +700,7 @@ Provide a concise summary in 2-4 paragraphs:`;
 RULES:
 1. Use tools immediately when asked to do something
 2. Be brief - summarize results in 1-2 sentences
-3. Respond in the user's language
+3. Respond in the user's language${modeInstructions}
 
 WORKSPACE: ${this.getWorkspacePath()}`,
                 cache_control: { type: "ephemeral" }
