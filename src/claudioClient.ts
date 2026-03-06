@@ -719,8 +719,9 @@ ${summary}
         // Build user message content with images if present
         let userContent: any;
         if (images && images.length > 0) {
+            console.log('ClaudioAI: Processing', images.length, 'images');
             userContent = [
-                ...images.map(img => {
+                ...images.map((img, idx) => {
                     // Clean base64 data - remove any whitespace/newlines
                     const cleanData = img.data.replace(/\s/g, '');
                     // Normalize media type
@@ -728,6 +729,7 @@ ${summary}
                     if (!mediaType.startsWith('image/')) {
                         mediaType = 'image/' + mediaType;
                     }
+                    console.log(`ClaudioAI: Image ${idx + 1} - type: ${mediaType}, data length: ${cleanData.length}`);
                     return {
                         type: 'image',
                         source: {
@@ -739,6 +741,7 @@ ${summary}
                 }),
                 { type: 'text', text: userMessage || 'Descreva esta imagem.' }
             ];
+            console.log('ClaudioAI: Final content blocks:', userContent.length);
         } else {
             userContent = userMessage;
         }
@@ -953,8 +956,9 @@ WORKSPACE: ${this.getWorkspacePath()}`,
                         const json = JSON.parse(data);
 
                         if (res.statusCode !== 200) {
-                            const errorMsg = json.error?.message || `HTTP ${res.statusCode}`;
-                            reject(new Error(errorMsg));
+                            console.error('ClaudioAI API Error:', res.statusCode, data);
+                            const errorMsg = json.error?.message || json.message || JSON.stringify(json).substring(0, 200) || `HTTP ${res.statusCode}`;
+                            reject(new Error(`HTTP ${res.statusCode}: ${errorMsg}`));
                             return;
                         }
 
@@ -971,6 +975,10 @@ WORKSPACE: ${this.getWorkspacePath()}`,
             });
 
             req.on('error', (e) => reject(new Error(`Network error: ${e.message}`)));
+
+            // Log request size for debugging
+            console.log(`ClaudioAI: Sending request, body size: ${body.length} bytes`);
+
             req.write(body);
             req.end();
         });
