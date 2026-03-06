@@ -150,7 +150,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (data) => {
             switch (data.type) {
                 case 'sendMessage':
-                    await this._handleMessage(data.message, data.displayMessage);
+                    await this._handleMessage(data.message, data.displayMessage, data.images);
                     break;
                 case 'newChat':
                     this._currentChatId = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
@@ -255,7 +255,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sendChatList();
     }
 
-    private async _handleMessage(message: string, displayMessage?: string) {
+    private async _handleMessage(message: string, displayMessage?: string, images?: Array<{data: string, type: string}>) {
         if (!this._view) return;
 
         // Create chat ID if needed
@@ -263,7 +263,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._currentChatId = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
         }
 
-        this._view.webview.postMessage({ type: 'userMessage', content: displayMessage || message });
+        this._view.webview.postMessage({ type: 'userMessage', content: displayMessage || message, images });
         this._view.webview.postMessage({ type: 'thinking', show: true });
 
         // Setup callbacks
@@ -310,7 +310,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         };
 
         try {
-            const response = await this._client.sendMessage(message);
+            const response = await this._client.sendMessage(message, images);
             this._view.webview.postMessage({ type: 'thinking', show: false });
             this._view.webview.postMessage({ type: 'assistantMessage', content: response });
             this._view.webview.postMessage({ type: 'tokenUpdate', tokens: this._client.getTokenUsage() });
@@ -1065,6 +1065,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         .attached-files.visible { display: flex; }
 
+        /* Image attachments */
+        .image-preview {
+            position: relative;
+            display: inline-block;
+            margin: 4px;
+        }
+
+        .image-preview img {
+            max-width: 100px;
+            max-height: 80px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            object-fit: cover;
+        }
+
+        .image-preview .remove-image {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 20px;
+            height: 20px;
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+
+        .image-preview .remove-image:hover {
+            background: #dc2626;
+        }
+
+        .attached-images {
+            display: none;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(99, 102, 241, 0.05);
+        }
+
+        .attached-images.visible { display: flex; }
+
+        .attached-images-label {
+            width: 100%;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .message-image {
+            max-width: 300px;
+            max-height: 200px;
+            border-radius: 8px;
+            margin: 8px 0;
+            border: 1px solid var(--border-color);
+        }
+
         /* Compact Modal */
         .compact-overlay {
             position: fixed;
@@ -1308,6 +1371,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <button class="mode-btn bypass" id="bypassBtn" data-mode="bypass">Bypass</button>
         </div>
         <div class="input-area">
+            <div class="attached-images" id="attachedImages">
+                <div class="attached-images-label">📷 Pasted images:</div>
+            </div>
             <div class="attached-files" id="attachedFiles"></div>
             <div class="input-wrapper" style="position: relative;">
                 <div class="mention-dropdown" id="mentionDropdown">
@@ -1339,12 +1405,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         let currentToolBlock = null;
         let busy = false;
         let attachedFiles = [];
+        let attachedImages = []; // { data: base64, type: 'image/png' }
         let mentionSelectedIndex = 0;
         let mentionVisible = false;
 
         const mentionDropdown = document.getElementById('mentionDropdown');
         const mentionList = document.getElementById('mentionList');
         const attachedFilesEl = document.getElementById('attachedFiles');
+        const attachedImagesEl = document.getElementById('attachedImages');
 
         const modes = { autoEdit: true, planMode: false, bypass: false };
 
@@ -1469,6 +1537,62 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         let fileContents = [];
 
+        // Image paste handler
+        document.addEventListener('paste', (e) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+
+            for (const item of items) {
+                if (item.type.startsWith('image/')) {
+                    e.preventDefault();
+                    const file = item.getAsFile();
+                    if (!file) continue;
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const base64 = event.target?.result;
+                        if (typeof base64 === 'string') {
+                            const imageData = base64.split(',')[1]; // Remove data:image/...;base64, prefix
+                            attachedImages.push({
+                                data: imageData,
+                                type: item.type
+                            });
+                            updateAttachedImages();
+                        }
+                    };
+                    reader.readAsDataURL(file);
+                }
+            }
+        });
+
+        function updateAttachedImages() {
+            if (attachedImages.length === 0) {
+                attachedImagesEl.classList.remove('visible');
+                return;
+            }
+
+            attachedImagesEl.classList.add('visible');
+
+            // Keep the label and rebuild previews
+            let html = '<div class="attached-images-label">📷 Pasted images (' + attachedImages.length + '):</div>';
+            attachedImages.forEach((img, idx) => {
+                html += '<div class="image-preview">' +
+                    '<img src="data:' + img.type + ';base64,' + img.data + '" alt="Pasted image">' +
+                    '<button class="remove-image" data-idx="' + idx + '">×</button>' +
+                    '</div>';
+            });
+            attachedImagesEl.innerHTML = html;
+
+            // Add remove handlers
+            attachedImagesEl.querySelectorAll('.remove-image').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    attachedImages.splice(idx, 1);
+                    updateAttachedImages();
+                });
+            });
+        }
+
         // Auto-resize textarea
         input.addEventListener('input', (e) => {
             input.style.height = 'auto';
@@ -1490,7 +1614,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Send message
         function send() {
             let msg = input.value.trim();
-            if (!msg && attachedFiles.length === 0) return;
+            if (!msg && attachedFiles.length === 0 && attachedImages.length === 0) return;
             if (busy) return;
 
             // Prepend file contents to message
@@ -1506,13 +1630,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
             // Show attached files in user message
             const filesInfo = attachedFiles.length > 0 ? '📎 ' + attachedFiles.join(', ') + '\\n\\n' : '';
-            vscode.postMessage({ type: 'sendMessage', message: msg, displayMessage: filesInfo + input.value.trim() });
+            const imagesInfo = attachedImages.length > 0 ? '📷 ' + attachedImages.length + ' image(s)\\n\\n' : '';
+
+            // Send message with images
+            vscode.postMessage({
+                type: 'sendMessage',
+                message: msg,
+                displayMessage: imagesInfo + filesInfo + input.value.trim(),
+                images: attachedImages.map(img => ({ data: img.data, type: img.type }))
+            });
 
             input.value = '';
             input.style.height = 'auto';
             attachedFiles = [];
             fileContents = [];
+            attachedImages = [];
             updateAttachedFiles();
+            updateAttachedImages();
         }
 
         sendBtn.addEventListener('click', send);
@@ -1611,13 +1745,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return html;
         }
 
-        function addMessage(role, content) {
+        function addMessage(role, content, images) {
             const div = document.createElement('div');
             div.className = 'message ' + role;
             const icon = role === 'user' ? '👤' : role === 'assistant' ? '🤖' : '⚠️';
             const label = role === 'user' ? 'You' : role === 'assistant' ? 'ClaudioAI' : 'Error';
+
+            let imagesHtml = '';
+            if (images && images.length > 0) {
+                imagesHtml = images.map(img =>
+                    '<img class="message-image" src="data:' + img.type + ';base64,' + img.data + '" alt="Attached image">'
+                ).join('');
+            }
+
             div.innerHTML = '<div class="message-header ' + role + '">' + icon + ' ' + label + '</div>' +
-                '<div class="message-content">' + formatContent(content) + '</div>';
+                '<div class="message-content">' + imagesHtml + formatContent(content) + '</div>';
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
         }
@@ -1705,7 +1847,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         window.addEventListener('message', e => {
             const msg = e.data;
             switch (msg.type) {
-                case 'userMessage': addMessage('user', msg.content); break;
+                case 'userMessage': addMessage('user', msg.content, msg.images); break;
                 case 'assistantMessage': addMessage('assistant', msg.content); busy = false; sendBtn.disabled = false; break;
                 case 'error': addMessage('error', msg.content); busy = false; sendBtn.disabled = false; break;
                 case 'toolStart': addToolStart(msg.name, msg.params); break;

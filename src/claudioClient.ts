@@ -705,10 +705,28 @@ ${summary}
         }
     }
 
-    async sendMessage(userMessage: string): Promise<string> {
+    async sendMessage(userMessage: string, images?: Array<{data: string, type: string}>): Promise<string> {
         const config = this.getConfig();
 
-        this.messages.push({ role: 'user', content: userMessage });
+        // Build user message content with images if present
+        let userContent: any;
+        if (images && images.length > 0) {
+            userContent = [
+                ...images.map(img => ({
+                    type: 'image',
+                    source: {
+                        type: 'base64',
+                        media_type: img.type,
+                        data: img.data
+                    }
+                })),
+                { type: 'text', text: userMessage || 'What do you see in this image?' }
+            ];
+        } else {
+            userContent = userMessage;
+        }
+
+        this.messages.push({ role: 'user', content: userContent });
 
         // Check if we need to compact before sending
         this.compactHistory();
