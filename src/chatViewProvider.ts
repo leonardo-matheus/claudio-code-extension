@@ -345,6 +345,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             border-color: var(--glow-color);
         }
 
+        .btn-ghost:disabled {
+            opacity: 0.5;
+            cursor: wait;
+        }
+
         .btn-primary {
             background: var(--accent-gradient);
             color: white;
@@ -1018,10 +1023,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             sidebar.classList.remove('visible');
         });
 
-        document.getElementById('compactBtn')?.addEventListener('click', () => {
-            if (confirm('Compact chat history? This will summarize old messages to save tokens.')) {
-                vscode.postMessage({ type: 'compactChat' });
-            }
+        const compactBtn = document.getElementById('compactBtn');
+        compactBtn?.addEventListener('click', () => {
+            compactBtn.textContent = '⏳';
+            compactBtn.disabled = true;
+            vscode.postMessage({ type: 'compactChat' });
+            setTimeout(() => {
+                compactBtn.textContent = '🗜️';
+                compactBtn.disabled = false;
+            }, 500);
         });
 
         function esc(str) {
@@ -1197,6 +1207,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 case 'compactResult':
                     if (msg.success) {
                         addMessage('assistant', '🗜️ ' + msg.message);
+                        // Flash token bar to show change
+                        tokenFill.style.transition = 'none';
+                        tokenFill.style.background = '#22c55e';
+                        setTimeout(() => {
+                            tokenFill.style.transition = 'all 0.5s ease';
+                            tokenFill.style.background = '';
+                        }, 200);
                     } else {
                         addMessage('error', '⚠️ ' + msg.message);
                     }
