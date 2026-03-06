@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ClaudioClient, AgentMode, TokenUsage, Message } from './claudioClient';
+import { ClaudioClient, AgentMode, TokenUsage, Message, PlanFile } from './claudioClient';
 
 interface ChatHistory {
     id: string;
@@ -230,6 +230,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         this._client.onAskPermission = async (action, details) => {
             return true; // Auto-approve for now
+        };
+
+        this._client.onPlanSaved = (plan: PlanFile) => {
+            this._view?.webview.postMessage({
+                type: 'planSaved',
+                path: plan.path,
+                title: plan.title
+            });
+
+            // Open the plan file in editor
+            vscode.workspace.openTextDocument(plan.path).then(doc => {
+                vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+            });
         };
 
         try {
@@ -1390,6 +1403,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     });
                     updateTokens(msg.tokens);
                     break;
+                case 'planSaved':
+                    const planDiv = document.createElement('div');
+                    planDiv.className = 'message assistant';
+                    planDiv.innerHTML =
+                        '<div class="message-header assistant">📋 PLAN SAVED</div>' +
+                        '<div class="summary-card">' +
+                        '<div class="summary-header">📁 Plan File Created</div>' +
+                        '<div class="summary-content">' +
+                        '<strong>' + esc(msg.title) + '</strong>\\n\\n' +
+                        '<code>' + esc(msg.path) + '</code>' +
+                        '</div>' +
+                        '<div class="summary-stats">' +
+                        '<div class="summary-stat">File opened in editor</div>' +
+                        '</div></div>';
+                    chat.appendChild(planDiv);
+                    chat.scrollTop = chat.scrollHeight;
+                    break;
+
                 case 'compactStart':
                     compactOverlay.classList.add('visible');
                     compactStatus.textContent = 'Initializing...';
