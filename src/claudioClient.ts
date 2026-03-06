@@ -430,7 +430,7 @@ Provide a concise summary in 2-4 paragraphs:`;
         return {
             apiKey: userConfig.get<string>('apiKey') || bundledConfig?.apiKey || '',
             apiUrl: userConfig.get<string>('apiUrl') || bundledConfig?.apiUrl || 'https://claudioai.dev',
-            model: userConfig.get<string>('model') || bundledConfig?.model || 'claude-sonnet-4-20250514'
+            model: userConfig.get<string>('model') || bundledConfig?.model || 'claude-opus-4-5'
         };
     }
 

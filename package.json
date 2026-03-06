@@ -147,8 +147,8 @@
         "claudioai.model": {
           "type": "string",
           "default": "",
-          "enum": ["", "claude-sonnet-4-20250514", "claude-opus-4-5", "claude-haiku-4-5-20251001"],
-          "enumDescriptions": ["Default", "Claude Sonnet 4", "Claude Opus 4.5", "Claude Haiku 4.5"],
+          "enum": ["", "claude-opus-4-5", "gpt-4.1", "gpt-5-codex", "o1"],
+          "enumDescriptions": ["Default (Claude Opus 4.5)", "Claude Opus 4.5", "GPT-4.1", "GPT-5 Codex", "O1"],
           "description": "Model to use (optional)"
         }
       }
