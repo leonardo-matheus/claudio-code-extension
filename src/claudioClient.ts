@@ -154,9 +154,10 @@ export class ClaudioClient {
     }
 
     forceCompact(): { success: boolean; message: string } {
-        if (this.messages.length <= 4) {
+        // Need at least 6 messages to compact (keeps 5: first 2 + summary + last 2)
+        if (this.messages.length <= 5) {
             console.log('ClaudioAI: Not enough messages to compact');
-            return { success: false, message: 'Not enough messages to compact (minimum 5 required)' };
+            return { success: false, message: 'Not enough messages to compact (minimum 6 required)' };
         }
 
         console.log('ClaudioAI: Manual compaction triggered');
@@ -196,8 +197,8 @@ export class ClaudioClient {
     private compactHistory(): boolean {
         const usage = this.getTokenUsage();
 
-        // Compact when reaching 90% of context
-        if (usage.percentUsed >= 90 && this.messages.length > 6) {
+        // Compact when reaching 90% of context (need > 5 messages to actually remove any)
+        if (usage.percentUsed >= 90 && this.messages.length > 5) {
             console.log('ClaudioAI: Auto-compacting chat history (90% context used)');
 
             // Keep first 2 messages (initial context) and last 4 messages (recent context)
