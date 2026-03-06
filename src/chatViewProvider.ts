@@ -111,6 +111,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sendChatList();
     }
 
+    private async getWorkspaceFiles(query: string): Promise<string[]> {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) return [];
+
+        const pattern = query ? `**/*${query}*` : '**/*';
+        const files = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 50);
+
+        return files.map(f => {
+            const relativePath = f.fsPath.replace(workspaceFolder.uri.fsPath, '').replace(/^[\/\\]/, '');
+            return relativePath;
+        }).sort();
+    }
+
     private sendChatList(): void {
         const chats = this.getChats();
         this._view?.webview.postMessage({
@@ -137,7 +150,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (data) => {
             switch (data.type) {
                 case 'sendMessage':
-                    await this._handleMessage(data.message);
+                    await this._handleMessage(data.message, data.displayMessage);
                     break;
                 case 'newChat':
                     this._currentChatId = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
@@ -163,6 +176,57 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 case 'getChats':
                     this.sendChatList();
                     break;
+                case 'getActiveFile':
+                    const activeEditor = vscode.window.activeTextEditor;
+                    if (activeEditor) {
+                        const doc = activeEditor.document;
+                        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                        const relativePath = doc.uri.fsPath.replace(workspaceFolder, '').replace(/^[\/\\]/, '');
+                        this._view?.webview.postMessage({
+                            type: 'activeFile',
+                            path: relativePath,
+                            content: doc.getText(),
+                            language: doc.languageId
+                        });
+                    } else {
+                        this._view?.webview.postMessage({
+                            type: 'activeFile',
+                            path: null,
+                            content: null
+                        });
+                    }
+                    break;
+
+                case 'getFiles':
+                    const files = await this.getWorkspaceFiles(data.query || '');
+                    this._view?.webview.postMessage({
+                        type: 'fileList',
+                        files
+                    });
+                    break;
+
+                case 'readFile':
+                    try {
+                        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                        const fullPath = data.path.startsWith('/') ? data.path : `${workspacePath}/${data.path}`;
+                        const fileUri = vscode.Uri.file(fullPath);
+                        const fileContent = await vscode.workspace.fs.readFile(fileUri);
+                        const content = Buffer.from(fileContent).toString('utf-8');
+                        this._view?.webview.postMessage({
+                            type: 'fileContent',
+                            path: data.path,
+                            content: content.length > 10000 ? content.substring(0, 10000) + '\n...(truncated)' : content
+                        });
+                    } catch (err) {
+                        this._view?.webview.postMessage({
+                            type: 'fileContent',
+                            path: data.path,
+                            content: null,
+                            error: 'File not found'
+                        });
+                    }
+                    break;
+
                 case 'compactChat':
                     this._view?.webview.postMessage({ type: 'compactStart' });
                     const result = await this._client.forceCompact((status) => {
@@ -191,7 +255,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sendChatList();
     }
 
-    private async _handleMessage(message: string) {
+    private async _handleMessage(message: string, displayMessage?: string) {
         if (!this._view) return;
 
         // Create chat ID if needed
@@ -199,7 +263,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._currentChatId = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
         }
 
-        this._view.webview.postMessage({ type: 'userMessage', content: message });
+        this._view.webview.postMessage({ type: 'userMessage', content: displayMessage || message });
         this._view.webview.postMessage({ type: 'thinking', show: true });
 
         // Setup callbacks
@@ -901,6 +965,106 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         pre code { padding: 0; background: transparent; color: var(--text-primary); }
 
+        /* File mention dropdown */
+        .mention-dropdown {
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            right: 0;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+            box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+            z-index: 100;
+        }
+
+        .mention-dropdown.visible { display: block; }
+
+        .mention-header {
+            padding: 10px 14px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mention-item {
+            padding: 10px 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            transition: background 0.15s;
+        }
+
+        .mention-item:hover, .mention-item.selected {
+            background: rgba(99, 102, 241, 0.15);
+        }
+
+        .mention-item .icon {
+            font-size: 14px;
+            opacity: 0.7;
+        }
+
+        .mention-item .path {
+            color: var(--text-primary);
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .mention-item .hint {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .mention-item.active-file {
+            background: rgba(34, 197, 94, 0.1);
+            border-left: 3px solid #22c55e;
+        }
+
+        .file-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--glow-color);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-right: 4px;
+        }
+
+        .file-tag .remove {
+            cursor: pointer;
+            opacity: 0.7;
+            margin-left: 2px;
+        }
+
+        .file-tag .remove:hover { opacity: 1; }
+
+        .attached-files {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border-color);
+            display: none;
+        }
+
+        .attached-files.visible { display: flex; }
+
         /* Compact Modal */
         .compact-overlay {
             position: fixed;
@@ -1144,8 +1308,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <button class="mode-btn bypass" id="bypassBtn" data-mode="bypass">Bypass</button>
         </div>
         <div class="input-area">
-            <div class="input-wrapper">
-                <textarea id="input" placeholder="Ask ClaudioAI anything..." rows="1"></textarea>
+            <div class="attached-files" id="attachedFiles"></div>
+            <div class="input-wrapper" style="position: relative;">
+                <div class="mention-dropdown" id="mentionDropdown">
+                    <div class="mention-header">📎 Mention a file</div>
+                    <div id="mentionList"></div>
+                </div>
+                <textarea id="input" placeholder="Ask ClaudioAI anything... (@ to mention files)" rows="1"></textarea>
                 <button class="send-btn" id="sendBtn">Send</button>
             </div>
         </div>
@@ -1169,6 +1338,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         let currentToolBlock = null;
         let busy = false;
+        let attachedFiles = [];
+        let mentionSelectedIndex = 0;
+        let mentionVisible = false;
+
+        const mentionDropdown = document.getElementById('mentionDropdown');
+        const mentionList = document.getElementById('mentionList');
+        const attachedFilesEl = document.getElementById('attachedFiles');
 
         const modes = { autoEdit: true, planMode: false, bypass: false };
 
@@ -1197,25 +1373,170 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             });
         });
 
+        // File mention system
+        function showMentionDropdown(query) {
+            mentionVisible = true;
+            mentionDropdown.classList.add('visible');
+            mentionSelectedIndex = 0;
+
+            if (query === '') {
+                // Show active file option first
+                vscode.postMessage({ type: 'getActiveFile' });
+            }
+            vscode.postMessage({ type: 'getFiles', query });
+        }
+
+        function hideMentionDropdown() {
+            mentionVisible = false;
+            mentionDropdown.classList.remove('visible');
+        }
+
+        function renderMentionList(files, activeFile) {
+            let html = '';
+
+            if (activeFile && activeFile.path) {
+                html += '<div class="mention-item active-file" data-path="' + esc(activeFile.path) + '" data-active="true">' +
+                    '<span class="icon">📄</span>' +
+                    '<span class="path">' + esc(activeFile.path) + '</span>' +
+                    '<span class="hint">Current file</span></div>';
+            }
+
+            files.forEach((file, i) => {
+                if (activeFile && file === activeFile.path) return;
+                const ext = file.split('.').pop() || '';
+                const icon = {'js': '📜', 'ts': '📘', 'json': '📋', 'md': '📝', 'css': '🎨', 'html': '🌐'}[ext] || '📄';
+                html += '<div class="mention-item" data-path="' + esc(file) + '">' +
+                    '<span class="icon">' + icon + '</span>' +
+                    '<span class="path">' + esc(file) + '</span></div>';
+            });
+
+            if (!html) {
+                html = '<div class="mention-item"><span class="path" style="color:var(--text-secondary)">No files found</span></div>';
+            }
+
+            mentionList.innerHTML = html;
+
+            mentionList.querySelectorAll('.mention-item[data-path]').forEach((item, idx) => {
+                item.addEventListener('click', () => selectMentionItem(item.dataset.path));
+                if (idx === mentionSelectedIndex) item.classList.add('selected');
+            });
+        }
+
+        function selectMentionItem(filePath) {
+            if (!filePath) return;
+
+            // Add to attached files if not already there
+            if (!attachedFiles.includes(filePath)) {
+                attachedFiles.push(filePath);
+                updateAttachedFiles();
+                vscode.postMessage({ type: 'readFile', path: filePath });
+            }
+
+            // Remove @ from input
+            const text = input.value;
+            const atIndex = text.lastIndexOf('@');
+            if (atIndex >= 0) {
+                input.value = text.substring(0, atIndex);
+            }
+
+            hideMentionDropdown();
+            input.focus();
+        }
+
+        function updateAttachedFiles() {
+            if (attachedFiles.length === 0) {
+                attachedFilesEl.classList.remove('visible');
+                attachedFilesEl.innerHTML = '';
+                return;
+            }
+
+            attachedFilesEl.classList.add('visible');
+            attachedFilesEl.innerHTML = attachedFiles.map(f =>
+                '<span class="file-tag">' +
+                '<span>📎 ' + esc(f.split('/').pop()) + '</span>' +
+                '<span class="remove" data-file="' + esc(f) + '">×</span>' +
+                '</span>'
+            ).join('');
+
+            attachedFilesEl.querySelectorAll('.remove').forEach(el => {
+                el.addEventListener('click', () => {
+                    attachedFiles = attachedFiles.filter(f => f !== el.dataset.file);
+                    fileContents = fileContents.filter(fc => fc.path !== el.dataset.file);
+                    updateAttachedFiles();
+                });
+            });
+        }
+
+        let fileContents = [];
+
         // Auto-resize textarea
-        input.addEventListener('input', () => {
+        input.addEventListener('input', (e) => {
             input.style.height = 'auto';
             input.style.height = Math.min(input.scrollHeight, 150) + 'px';
+
+            // Check for @ mention
+            const text = input.value;
+            const cursorPos = input.selectionStart;
+            const textBeforeCursor = text.substring(0, cursorPos);
+            const atMatch = textBeforeCursor.match(/@([\\w.-]*)$/);
+
+            if (atMatch) {
+                showMentionDropdown(atMatch[1]);
+            } else {
+                hideMentionDropdown();
+            }
         });
 
         // Send message
         function send() {
-            const msg = input.value.trim();
-            if (!msg || busy) return;
+            let msg = input.value.trim();
+            if (!msg && attachedFiles.length === 0) return;
+            if (busy) return;
+
+            // Prepend file contents to message
+            if (fileContents.length > 0) {
+                const filesContext = fileContents.map(fc =>
+                    '--- File: ' + fc.path + ' ---\\n' + fc.content + '\\n--- End of ' + fc.path + ' ---'
+                ).join('\\n\\n');
+                msg = filesContext + '\\n\\n' + msg;
+            }
+
             busy = true;
             sendBtn.disabled = true;
-            vscode.postMessage({ type: 'sendMessage', message: msg });
+
+            // Show attached files in user message
+            const filesInfo = attachedFiles.length > 0 ? '📎 ' + attachedFiles.join(', ') + '\\n\\n' : '';
+            vscode.postMessage({ type: 'sendMessage', message: msg, displayMessage: filesInfo + input.value.trim() });
+
             input.value = '';
             input.style.height = 'auto';
+            attachedFiles = [];
+            fileContents = [];
+            updateAttachedFiles();
         }
 
         sendBtn.addEventListener('click', send);
         input.addEventListener('keydown', e => {
+            if (mentionVisible) {
+                const items = mentionList.querySelectorAll('.mention-item[data-path]');
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    mentionSelectedIndex = Math.min(mentionSelectedIndex + 1, items.length - 1);
+                    items.forEach((item, i) => item.classList.toggle('selected', i === mentionSelectedIndex));
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    mentionSelectedIndex = Math.max(mentionSelectedIndex - 1, 0);
+                    items.forEach((item, i) => item.classList.toggle('selected', i === mentionSelectedIndex));
+                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    const selected = items[mentionSelectedIndex];
+                    if (selected) selectMentionItem(selected.dataset.path);
+                } else if (e.key === 'Escape') {
+                    hideMentionDropdown();
+                }
+                return;
+            }
+
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
         });
 
@@ -1419,6 +1740,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                         '</div></div>';
                     chat.appendChild(planDiv);
                     chat.scrollTop = chat.scrollHeight;
+                    break;
+
+                case 'activeFile':
+                    window._activeFile = msg.path ? { path: msg.path, content: msg.content } : null;
+                    break;
+
+                case 'fileList':
+                    renderMentionList(msg.files || [], window._activeFile);
+                    break;
+
+                case 'fileContent':
+                    if (msg.content) {
+                        fileContents.push({ path: msg.path, content: msg.content });
+                    }
                     break;
 
                 case 'compactStart':
