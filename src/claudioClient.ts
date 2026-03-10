@@ -49,8 +49,8 @@ const CONFIG = {
     MAX_CONTEXT_TOKENS: 200000,
     MAX_ITERATIONS: 20,
     MAX_TRUNCATION_RETRIES: 2,
-    REQUEST_TIMEOUT_MS: 120000,
-    COMMAND_TIMEOUT_MS: 120000,
+    REQUEST_TIMEOUT_MS: 90000,
+    COMMAND_TIMEOUT_MS: 60000,
     MAX_BUFFER_SIZE: 10 * 1024 * 1024,
 
     LIMITS: {
@@ -616,35 +616,31 @@ ${summary}
                 case "list_files": {
                     const targetPath = path.join(workspacePath, params.path || "");
                     if (!fs.existsSync(targetPath)) {
-                        return { result: `Directory not found: ${params.path || "."}`, success: false };
+                        return { result: `Directory not found: ${params.path || "."}. Try list_files with path="" to see root.`, success: false };
                     }
                     const items = fs.readdirSync(targetPath, { withFileTypes: true });
-                    const result = items.map(item => {
-                        const prefix = item.isDirectory() ? "📁 " : "📄 ";
-                        return prefix + item.name + (item.isDirectory() ? "/" : "");
-                    }).join("\n");
+                    const result = items.map(item =>
+                        (item.isDirectory() ? "📁 " : "📄 ") + item.name + (item.isDirectory() ? "/" : "")
+                    ).join("\n");
                     return { result: result || "(empty directory)", success: true };
                 }
 
                 case "read_file": {
                     if (!params.path) {
-                        return { result: "Error: path is required", success: false };
+                        return { result: "Error: path is required. Use list_files first to find the correct path.", success: false };
                     }
                     const filePath = path.join(workspacePath, params.path);
                     if (!fs.existsSync(filePath)) {
-                        return { result: `File not found: ${params.path}`, success: false };
+                        const dir = path.dirname(params.path);
+                        return { result: `File not found: ${params.path}. Use list_files with path="${dir || ''}" to verify.`, success: false };
                     }
                     const content = fs.readFileSync(filePath, 'utf-8');
                     const lines = content.split('\n');
                     const limit = CONFIG.LIMITS.FILE_LINES;
 
-                    if (lines.length > limit) {
-                        return {
-                            result: lines.slice(0, limit).join('\n') + `\n\n... (${lines.length - limit} more lines)`,
-                            success: true
-                        };
-                    }
-                    return { result: content, success: true };
+                    return lines.length > limit
+                        ? { result: `${lines.slice(0, limit).join('\n')}\n\n... (${lines.length - limit} more lines)`, success: true }
+                        : { result: content, success: true };
                 }
 
                 case "write_file": {
@@ -680,13 +676,13 @@ ${summary}
 
                 case "edit_file": {
                     if (!params.path) {
-                        return { result: "Error: path is required", success: false };
+                        return { result: "Error: path is required. Use list_files to find it.", success: false };
                     }
                     if (params.old_text === undefined || params.old_text === null) {
-                        return { result: "Error: old_text is required", success: false };
+                        return { result: "Error: old_text is required. Use read_file first to see current content.", success: false };
                     }
                     if (params.new_text === undefined || params.new_text === null) {
-                        return { result: "Error: new_text is required", success: false };
+                        return { result: "Error: new_text is required.", success: false };
                     }
                     const oldText = String(params.old_text);
                     const newText = String(params.new_text);
@@ -697,16 +693,15 @@ ${summary}
                     }
                     const filePath = path.join(workspacePath, params.path);
                     if (!fs.existsSync(filePath)) {
-                        return { result: `File not found: ${params.path}`, success: false };
+                        return { result: `File not found: ${params.path}. Use list_files to verify path.`, success: false };
                     }
                     let content = fs.readFileSync(filePath, 'utf-8');
                     if (!content.includes(oldText)) {
-                        return { result: `Text not found in file: "${oldText.substring(0, 50)}..."`, success: false };
+                        return { result: `Text not found. Read the file again - content may have changed. Searched for: "${oldText.substring(0, 80)}..."`, success: false };
                     }
                     content = content.replace(oldText, newText);
                     fs.writeFileSync(filePath, content, 'utf-8');
 
-                    // Open the file in editor
                     const doc = await vscode.workspace.openTextDocument(filePath);
                     await vscode.window.showTextDocument(doc);
 
@@ -745,10 +740,15 @@ ${summary}
                             const truncated = output.length > limit
                                 ? output.substring(0, limit) + '\n... (truncated)'
                                 : output;
-                            resolve({
-                                result: `${truncated}\n[exit: ${exitCode}]`,
-                                success: exitCode === 0
-                            });
+
+                            if (exitCode !== 0) {
+                                resolve({
+                                    result: `Command failed [exit: ${exitCode}]. Output:\n${truncated}\nTry a different approach or verify paths.`,
+                                    success: false
+                                });
+                            } else {
+                                resolve({ result: truncated || '(no output)', success: true });
+                            }
                         });
                     });
                 }
@@ -993,9 +993,10 @@ MODE: PLAN MODE (Active)
             text: `You are ClaudioAI, a concise coding assistant with filesystem access.
 
 RULES:
-1. Use tools immediately when asked to do something
-2. Be brief - summarize results in 1-2 sentences
-3. Respond in the user's language${modeInstructions}
+1. Use tools immediately when asked
+2. Be brief - 1-2 sentences max
+3. On tool failure: try alternative immediately, don't explain the error
+4. Respond in user's language${modeInstructions}
 
 WORKSPACE: ${this.getWorkspacePath()}`,
             cache_control: { type: "ephemeral" }
