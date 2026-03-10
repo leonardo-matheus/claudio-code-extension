@@ -608,7 +608,7 @@ ${summary}
                     if (params.content === undefined || params.content === null) {
                         console.error(`ClaudioAI: write_file missing content. Received params:`, JSON.stringify(params));
                         return {
-                            result: `Error: content is required for write_file. Received only: ${Object.keys(params).join(', ')}. Please try again.`,
+                            result: `Error: content parameter is missing (response may have been truncated). For large files, use edit_file to make incremental changes instead of rewriting the entire file. Read the file first with read_file, then use edit_file to replace specific sections.`,
                             success: false
                         };
                     }
@@ -856,6 +856,32 @@ ${summary}
                     if (this.onText) this.onText(block.text);
                 } else if (block.type === 'tool_use') {
                     toolCalls.push(block);
+                }
+            }
+
+            // Check for truncated tool_use (missing required params due to max_tokens)
+            if (response.stop_reason === 'max_tokens' && toolCalls.length > 0) {
+                const lastTool = toolCalls[toolCalls.length - 1];
+                const input = lastTool.input || {};
+
+                // Check if write_file is missing content (truncated)
+                if (lastTool.name === 'write_file' && !input.content) {
+                    console.log('ClaudioAI: Detected truncated write_file, asking for incremental approach');
+
+                    // Add the truncated response to history
+                    this.messages.push({ role: 'assistant', content: response.content });
+
+                    // Ask the model to use edit_file instead
+                    this.messages.push({
+                        role: 'user',
+                        content: [{
+                            type: 'tool_result',
+                            tool_use_id: lastTool.id,
+                            content: 'Error: Response was truncated. The file content is too large to write at once. Please use edit_file to make incremental changes to the existing file, or split the changes into smaller parts.'
+                        }]
+                    });
+
+                    continue; // Retry with the new instruction
                 }
             }
 
