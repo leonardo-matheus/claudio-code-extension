@@ -155,9 +155,11 @@ export class ClaudioClient {
     private billingInputTokens = 0;
     private billingOutputTokens = 0;
 
-    // Cached values for performance
     private cachedConfig: ApiConfig | null = null;
     private cachedWorkspacePath: string | null = null;
+
+    private abortController: AbortController | null = null;
+    private isProcessing = false;
 
     public onToolStart?: (name: string, params: Record<string, unknown>) => void;
     public onToolEnd?: (name: string, result: string, success: boolean) => void;
@@ -229,6 +231,19 @@ export class ClaudioClient {
         this.currentOutputTokens = output;
         this.billingInputTokens = input;
         this.billingOutputTokens = output;
+    }
+
+    abort(): boolean {
+        if (this.abortController && this.isProcessing) {
+            this.abortController.abort();
+            this.isProcessing = false;
+            return true;
+        }
+        return false;
+    }
+
+    getIsProcessing(): boolean {
+        return this.isProcessing;
     }
 
     async forceCompact(onProgress?: (status: string) => void): Promise<{ success: boolean; message: string; summary?: string }> {
@@ -811,6 +826,9 @@ ${summary}
     }
 
     async sendMessage(userMessage: string, images?: Array<{data: string, type: string}>): Promise<string> {
+        this.abortController = new AbortController();
+        this.isProcessing = true;
+
         const config = this.getConfig();
 
         const userContent = images?.length
@@ -827,6 +845,11 @@ ${summary}
         let lastTextContent = '';
 
         while (iterations < CONFIG.MAX_ITERATIONS) {
+            if (this.abortController?.signal.aborted) {
+                this.isProcessing = false;
+                return lastTextContent || "Stopped by user";
+            }
+
             iterations++;
             console.log(`ClaudioAI: Iteration ${iterations}/${CONFIG.MAX_ITERATIONS}`);
 
@@ -907,26 +930,21 @@ ${summary}
             lastTextContent = textContent || lastTextContent;
             this.messages.push({ role: 'assistant', content: response.content });
 
-            // If stop_reason is end_turn or no tool calls, we're done
             if (response.stop_reason === 'end_turn' || toolCalls.length === 0) {
                 this.compactHistory();
 
-                // Save plan if in plan mode
                 if (this.mode.planMode && lastTextContent.length > 100) {
                     try {
-                        // Extract title from first line or generate one
                         const firstLine = lastTextContent.split('\n')[0];
                         const title = firstLine.replace(/^[#*\-\s]+/, '').substring(0, 60) || 'Plan';
                         const plan = this.savePlan(title, lastTextContent);
-
-                        if (this.onPlanSaved) {
-                            this.onPlanSaved(plan);
-                        }
+                        this.onPlanSaved?.(plan);
                     } catch (err) {
                         console.error('ClaudioAI: Failed to save plan', err);
                     }
                 }
 
+                this.isProcessing = false;
                 return lastTextContent;
             }
 
@@ -975,6 +993,7 @@ ${summary}
         }
 
         console.log('ClaudioAI: Max iterations reached');
+        this.isProcessing = false;
         return lastTextContent || "Max iterations reached";
     }
 

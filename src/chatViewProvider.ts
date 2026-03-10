@@ -10,12 +10,20 @@ interface ChatHistory {
     updatedAt: number;
 }
 
+interface QueuedMessage {
+    message: string;
+    displayMessage?: string;
+    images?: Array<{data: string, type: string}>;
+}
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'claudioai.chatView';
     private _view?: vscode.WebviewView;
     private _client: ClaudioClient;
     private _context: vscode.ExtensionContext;
     private _currentChatId: string | null = null;
+    private _messageQueue: QueuedMessage[] = [];
+    private _isProcessingQueue = false;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -150,7 +158,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (data) => {
             switch (data.type) {
                 case 'sendMessage':
-                    await this._handleMessage(data.message, data.displayMessage, data.images);
+                    this._enqueueMessage({
+                        message: data.message,
+                        displayMessage: data.displayMessage,
+                        images: data.images
+                    });
+                    break;
+                case 'stopProcessing':
+                    this._stopProcessing();
                     break;
                 case 'newChat':
                     this._currentChatId = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
@@ -253,6 +268,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({ type: 'clearChat' });
         this._view?.webview.postMessage({ type: 'tokenUpdate', tokens: this._client.getTokenUsage() });
         this.sendChatList();
+    }
+
+    private _enqueueMessage(msg: QueuedMessage) {
+        this._messageQueue.push(msg);
+        this._view?.webview.postMessage({
+            type: 'queueUpdate',
+            count: this._messageQueue.length
+        });
+        this._processQueue();
+    }
+
+    private async _processQueue() {
+        if (this._isProcessingQueue || this._messageQueue.length === 0) return;
+
+        this._isProcessingQueue = true;
+
+        while (this._messageQueue.length > 0) {
+            const msg = this._messageQueue.shift()!;
+            this._view?.webview.postMessage({
+                type: 'queueUpdate',
+                count: this._messageQueue.length
+            });
+            await this._handleMessage(msg.message, msg.displayMessage, msg.images);
+        }
+
+        this._isProcessingQueue = false;
+    }
+
+    private _stopProcessing() {
+        const stopped = this._client.abort();
+        if (stopped) {
+            this._view?.webview.postMessage({ type: 'thinking', show: false });
+            this._view?.webview.postMessage({
+                type: 'assistantMessage',
+                content: '⏹️ Stopped by user'
+            });
+        }
+        this._messageQueue = [];
+        this._view?.webview.postMessage({ type: 'queueUpdate', count: 0 });
     }
 
     private async _handleMessage(message: string, displayMessage?: string, images?: Array<{data: string, type: string}>) {
@@ -805,14 +859,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         /* Thinking indicator */
         .thinking {
-            padding: 16px;
+            padding: 12px 16px;
             display: none;
             align-items: center;
-            gap: 12px;
+            justify-content: space-between;
             color: var(--text-secondary);
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin: 8px 12px;
         }
 
         .thinking.visible { display: flex; }
+
+        .thinking-content { display: flex; align-items: center; gap: 10px; }
 
         .thinking-dots { display: flex; gap: 6px; }
 
@@ -827,6 +886,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
         .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        .stop-btn {
+            padding: 6px 12px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        .stop-btn:hover { background: #c82333; transform: scale(1.05); }
+
+        .queue-badge {
+            background: var(--accent);
+            color: var(--bg-primary);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            display: none;
+        }
+        .queue-badge.visible { display: inline; }
 
         @keyframes pulse {
             0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
@@ -1335,12 +1417,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div class="chat-container">
         <div class="chat" id="chat"></div>
         <div class="thinking" id="thinking">
-            <div class="thinking-dots">
-                <div class="thinking-dot"></div>
-                <div class="thinking-dot"></div>
-                <div class="thinking-dot"></div>
+            <div class="thinking-content">
+                <div class="thinking-dots">
+                    <div class="thinking-dot"></div>
+                    <div class="thinking-dot"></div>
+                    <div class="thinking-dot"></div>
+                </div>
+                <span>Thinking...</span>
+                <span class="queue-badge" id="queueBadge"></span>
             </div>
-            <span>Thinking...</span>
+            <button class="stop-btn" id="stopBtn" title="Stop processing">⏹️ Stop</button>
         </div>
     </div>
 
@@ -1401,6 +1487,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const tokenOutput = document.getElementById('tokenOutput');
         const tokenFill = document.getElementById('tokenFill');
         const tokenPercent = document.getElementById('tokenPercent');
+        const stopBtn = document.getElementById('stopBtn');
+        const queueBadge = document.getElementById('queueBadge');
 
         let currentToolBlock = null;
         let busy = false;
@@ -1611,13 +1699,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
         });
 
-        // Send message
+        // Send message (supports queue)
         function send() {
             let msg = input.value.trim();
             if (!msg && attachedFiles.length === 0 && attachedImages.length === 0) return;
-            if (busy) return;
 
-            // Prepend file contents to message
             if (fileContents.length > 0) {
                 const filesContext = fileContents.map(fc =>
                     '--- File: ' + fc.path + ' ---\\n' + fc.content + '\\n--- End of ' + fc.path + ' ---'
@@ -1625,8 +1711,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 msg = filesContext + '\\n\\n' + msg;
             }
 
-            busy = true;
-            sendBtn.disabled = true;
+            if (!busy) {
+                busy = true;
+                sendBtn.disabled = true;
+            }
 
             // Show attached files in user message
             const filesInfo = attachedFiles.length > 0 ? '📎 ' + attachedFiles.join(', ') + '\\n\\n' : '';
@@ -1686,6 +1774,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         compactBtn?.addEventListener('click', () => {
             compactBtn.disabled = true;
             vscode.postMessage({ type: 'compactChat' });
+        });
+
+        stopBtn?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'stopProcessing' });
         });
 
         function esc(str) {
@@ -1853,6 +1945,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 case 'toolStart': addToolStart(msg.name, msg.params); break;
                 case 'toolEnd': addToolEnd(msg.name, msg.result, msg.success); break;
                 case 'thinking': thinking.classList.toggle('visible', msg.show); break;
+                case 'queueUpdate':
+                    if (msg.count > 0) {
+                        queueBadge.textContent = '+' + msg.count + ' queued';
+                        queueBadge.classList.add('visible');
+                    } else {
+                        queueBadge.classList.remove('visible');
+                    }
+                    break;
                 case 'clearChat': chat.innerHTML = ''; busy = false; sendBtn.disabled = false; break;
                 case 'tokenUpdate': updateTokens(msg.tokens); break;
                 case 'chatList': renderChatList(msg.chats, msg.currentChatId); break;
