@@ -7,7 +7,14 @@ import { exec, spawn, ChildProcess } from 'child_process';
 
 export interface Message {
     role: 'user' | 'assistant';
-    content: any;
+    content: MessageContent;
+}
+
+type MessageContent = string | ContentBlock[];
+
+interface ContentBlock {
+    type: string;
+    [key: string]: any;
 }
 
 export interface AgentMode {
@@ -23,20 +30,44 @@ export interface PlanFile {
 }
 
 export interface TokenUsage {
-    inputTokens: number;      // Current context size
-    outputTokens: number;     // Current output
-    cacheReadTokens: number;  // Tokens read from cache
-    totalTokens: number;      // Current total (input + output)
-    percentUsed: number;      // % of 200K context
-    // Billing totals (accumulated)
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    totalTokens: number;
+    percentUsed: number;
     billingInput: number;
     billingOutput: number;
 }
 
-const MAX_CONTEXT_TOKENS = 200000; // Claude's context window
+interface ApiConfig {
+    apiKey: string;
+    apiUrl: string;
+    model: string;
+}
 
-// Default config (will be overridden by config.json)
-let bundledConfig: { apiUrl: string; apiKey: string; model: string } | null = null;
+const CONFIG = {
+    MAX_CONTEXT_TOKENS: 200000,
+    MAX_ITERATIONS: 20,
+    MAX_TRUNCATION_RETRIES: 2,
+    REQUEST_TIMEOUT_MS: 120000,
+    COMMAND_TIMEOUT_MS: 120000,
+    MAX_BUFFER_SIZE: 10 * 1024 * 1024,
+
+    LIMITS: {
+        FILE_LINES: 200,
+        SEARCH_RESULTS: 20,
+        TRUNCATE_OLD_RESULT: 200,
+        TRUNCATE_OLD_TEXT: 300,
+        COMMAND_OUTPUT: 2000,
+        SUMMARY_INPUT: 8000,
+        RECENT_MESSAGES: 10,
+    },
+
+    VALID_IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const,
+    READ_ONLY_TOOLS: ['list_files', 'read_file', 'search_files'] as const,
+} as const;
+
+let bundledConfig: ApiConfig | null = null;
 
 const TOOLS = [
     {
@@ -114,20 +145,21 @@ const TOOLS = [
 
 export class ClaudioClient {
     private messages: Message[] = [];
-    private extensionPath: string = '';
+    private extensionPath = '';
     private mode: AgentMode = { autoEdit: true, planMode: false, bypass: false };
-    private backgroundProcesses: Map<string, ChildProcess> = new Map();
+    private backgroundProcesses = new Map<string, ChildProcess>();
 
-    // Token tracking - current context (not accumulated)
-    private currentInputTokens: number = 0;
-    private currentOutputTokens: number = 0;
-    private currentCacheReadTokens: number = 0;
-    // Billing totals (accumulated across all calls)
-    private billingInputTokens: number = 0;
-    private billingOutputTokens: number = 0;
+    private currentInputTokens = 0;
+    private currentOutputTokens = 0;
+    private currentCacheReadTokens = 0;
+    private billingInputTokens = 0;
+    private billingOutputTokens = 0;
 
-    // Callbacks
-    public onToolStart?: (name: string, params: any) => void;
+    // Cached values for performance
+    private cachedConfig: ApiConfig | null = null;
+    private cachedWorkspacePath: string | null = null;
+
+    public onToolStart?: (name: string, params: Record<string, unknown>) => void;
     public onToolEnd?: (name: string, result: string, success: boolean) => void;
     public onText?: (text: string) => void;
     public onThinking?: (thinking: string) => void;
@@ -169,6 +201,7 @@ export class ClaudioClient {
         this.currentCacheReadTokens = 0;
         this.billingInputTokens = 0;
         this.billingOutputTokens = 0;
+        this.cachedConfig = null;
     }
 
     getMessages(): Message[] {
@@ -180,13 +213,12 @@ export class ClaudioClient {
     }
 
     getTokenUsage(): TokenUsage {
-        const total = this.currentInputTokens + this.currentOutputTokens;
         return {
             inputTokens: this.currentInputTokens,
             outputTokens: this.currentOutputTokens,
             cacheReadTokens: this.currentCacheReadTokens,
-            totalTokens: total,
-            percentUsed: Math.round((this.currentInputTokens / MAX_CONTEXT_TOKENS) * 100),
+            totalTokens: this.currentInputTokens + this.currentOutputTokens,
+            percentUsed: Math.round((this.currentInputTokens / CONFIG.MAX_CONTEXT_TOKENS) * 100),
             billingInput: this.billingInputTokens,
             billingOutput: this.billingOutputTokens
         };
@@ -287,7 +319,46 @@ export class ClaudioClient {
         }
     }
 
-    private requestSummary(config: any, conversationText: string): Promise<string> {
+    private httpPost(url: string, body: string, apiKey: string, extraHeaders?: Record<string, string>): Promise<any> {
+        return new Promise((resolve, reject) => {
+            const parsed = new URL(url);
+            const lib = parsed.protocol === 'https:' ? https : http;
+
+            const req = lib.request({
+                hostname: parsed.hostname,
+                port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+                path: parsed.pathname,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': apiKey,
+                    'anthropic-version': '2023-06-01',
+                    ...extraHeaders
+                }
+            }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        resolve({ statusCode: res.statusCode, data: JSON.parse(data) });
+                    } catch {
+                        reject(new Error(`Failed to parse response: ${data.substring(0, 100)}`));
+                    }
+                });
+            });
+
+            req.on('error', (e) => reject(new Error(`Network error: ${e.message}`)));
+            req.setTimeout(CONFIG.REQUEST_TIMEOUT_MS, () => {
+                req.destroy();
+                reject(new Error(`Request timeout (${CONFIG.REQUEST_TIMEOUT_MS / 1000}s)`));
+            });
+
+            req.write(body);
+            req.end();
+        });
+    }
+
+    private async requestSummary(config: ApiConfig, conversationText: string): Promise<string> {
         const summaryPrompt = `Summarize this conversation concisely. Include:
 - Main topics discussed
 - Key decisions made
@@ -296,7 +367,7 @@ export class ClaudioClient {
 - Important context for continuing
 
 Conversation:
-${conversationText.substring(0, 8000)}
+${conversationText.substring(0, CONFIG.LIMITS.SUMMARY_INPUT)}
 
 Provide a concise summary in 2-4 paragraphs:`;
 
@@ -306,43 +377,12 @@ Provide a concise summary in 2-4 paragraphs:`;
             messages: [{ role: 'user', content: summaryPrompt }]
         });
 
-        return new Promise((resolve, reject) => {
-            const url = new URL(config.apiUrl + '/v1/messages');
-            const lib = url.protocol === 'https:' ? https : http;
+        const { data } = await this.httpPost(`${config.apiUrl}/v1/messages`, body, config.apiKey);
 
-            const req = lib.request({
-                hostname: url.hostname,
-                port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                path: url.pathname,
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': config.apiKey,
-                    'anthropic-version': '2023-06-01'
-                }
-            }, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try {
-                        const json = JSON.parse(data);
-                        if (json.content && json.content[0]?.text) {
-                            resolve(json.content[0].text);
-                        } else if (json.error) {
-                            reject(new Error(json.error.message));
-                        } else {
-                            reject(new Error('Invalid response'));
-                        }
-                    } catch (e) {
-                        reject(e);
-                    }
-                });
-            });
-
-            req.on('error', reject);
-            req.write(body);
-            req.end();
-        });
+        if (data.content?.[0]?.text) {
+            return data.content[0].text;
+        }
+        throw new Error(data.error?.message || 'Invalid response');
     }
 
     private compactHistory(): boolean {
@@ -377,73 +417,57 @@ Provide a concise summary in 2-4 paragraphs:`;
     }
 
     private optimizeMessages(): Message[] {
-        // Keep only the last 10 messages in full, truncate older tool results
-        const result: Message[] = [];
-        const recentCount = 10;
-        const startTruncateIdx = Math.max(0, this.messages.length - recentCount);
+        const { RECENT_MESSAGES, TRUNCATE_OLD_RESULT, TRUNCATE_OLD_TEXT } = CONFIG.LIMITS;
+        const startTruncateIdx = Math.max(0, this.messages.length - RECENT_MESSAGES);
 
-        for (let i = 0; i < this.messages.length; i++) {
-            const msg = this.messages[i];
+        return this.messages.map((msg, i) => {
+            if (i >= startTruncateIdx) return msg;
 
-            if (i < startTruncateIdx) {
-                // Truncate old messages
-                if (msg.role === 'user' && Array.isArray(msg.content)) {
-                    // Remove images and truncate tool results in old messages
-                    const truncatedContent = msg.content
-                        .filter((item: any) => item.type !== 'image') // Remove images from old messages
-                        .map((item: any) => {
-                            if (item.type === 'tool_result' && typeof item.content === 'string') {
-                                const content = item.content;
-                                if (content.length > 200) {
-                                    return {
-                                        ...item,
-                                        content: content.substring(0, 200) + '... [truncated]'
-                                    };
-                                }
-                            }
-                            return item;
-                        });
-
-                    // If only images were removed, add a placeholder text
-                    if (truncatedContent.length === 0) {
-                        result.push({ role: 'user', content: '[Previous message contained images]' });
-                    } else {
-                        result.push({ role: 'user', content: truncatedContent });
-                    }
-                } else if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-                    // Keep assistant messages but truncate text
-                    const truncatedContent = msg.content.map((block: any) => {
-                        if (block.type === 'text' && block.text.length > 300) {
-                            return { ...block, text: block.text.substring(0, 300) + '...' };
+            if (msg.role === 'user' && Array.isArray(msg.content)) {
+                const truncated = msg.content
+                    .filter((item: ContentBlock) => item.type !== 'image')
+                    .map((item: ContentBlock) => {
+                        if (item.type === 'tool_result' && typeof item.content === 'string' && item.content.length > TRUNCATE_OLD_RESULT) {
+                            return { ...item, content: item.content.substring(0, TRUNCATE_OLD_RESULT) + '... [truncated]' };
                         }
-                        return block;
+                        return item;
                     });
-                    result.push({ role: 'assistant', content: truncatedContent });
-                } else {
-                    result.push(msg);
-                }
-            } else {
-                // Recent messages - keep in full
-                result.push(msg);
-            }
-        }
 
-        return result;
+                return truncated.length === 0
+                    ? { role: 'user' as const, content: '[Previous message contained images]' }
+                    : { role: 'user' as const, content: truncated };
+            }
+
+            if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                const truncated = msg.content.map((block: ContentBlock) =>
+                    block.type === 'text' && block.text?.length > TRUNCATE_OLD_TEXT
+                        ? { ...block, text: block.text.substring(0, TRUNCATE_OLD_TEXT) + '...' }
+                        : block
+                );
+                return { role: 'assistant' as const, content: truncated };
+            }
+
+            return msg;
+        });
     }
 
-    private getConfig() {
-        const userConfig = vscode.workspace.getConfiguration('claudioai');
+    private getConfig(): ApiConfig {
+        if (this.cachedConfig) return this.cachedConfig;
 
-        // User settings override bundled config
-        return {
+        const userConfig = vscode.workspace.getConfiguration('claudioai');
+        this.cachedConfig = {
             apiKey: userConfig.get<string>('apiKey') || bundledConfig?.apiKey || '',
             apiUrl: userConfig.get<string>('apiUrl') || bundledConfig?.apiUrl || 'https://claudioai.dev',
             model: userConfig.get<string>('model') || bundledConfig?.model || 'claude-opus-4-5'
         };
+        return this.cachedConfig;
     }
 
     private getWorkspacePath(): string {
-        return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+        if (!this.cachedWorkspacePath) {
+            this.cachedWorkspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+        }
+        return this.cachedWorkspacePath;
     }
 
     private getClaudioDir(): string {
@@ -551,10 +575,28 @@ ${summary}
 
     private async checkPermission(action: string, details: string): Promise<boolean> {
         if (this.mode.bypass) return true;
-        if (this.onAskPermission) {
-            return await this.onAskPermission(action, details);
-        }
-        return true;
+        return this.onAskPermission ? this.onAskPermission(action, details) : true;
+    }
+
+    private buildImageContent(images: Array<{data: string, type: string}>, message: string): ContentBlock[] {
+        const imageBlocks = images.map((img) => {
+            let mediaType = img.type.toLowerCase();
+            if (mediaType === 'image/jpg') mediaType = 'image/jpeg';
+            if (!CONFIG.VALID_IMAGE_TYPES.includes(mediaType as any)) {
+                mediaType = 'image/png';
+            }
+
+            return {
+                type: 'image',
+                source: {
+                    type: 'base64',
+                    media_type: mediaType,
+                    data: img.data.replace(/\s/g, '')
+                }
+            };
+        });
+
+        return [...imageBlocks, { type: 'text', text: message || 'Descreva esta imagem.' }];
     }
 
     async executeTool(name: string, params: any): Promise<{ result: string; success: boolean }> {
@@ -594,9 +636,13 @@ ${summary}
                     }
                     const content = fs.readFileSync(filePath, 'utf-8');
                     const lines = content.split('\n');
-                    // Limit to 200 lines to save tokens
-                    if (lines.length > 200) {
-                        return { result: lines.slice(0, 200).join('\n') + `\n\n... (${lines.length - 200} more lines, use search_files for specific content)`, success: true };
+                    const limit = CONFIG.LIMITS.FILE_LINES;
+
+                    if (lines.length > limit) {
+                        return {
+                            result: lines.slice(0, limit).join('\n') + `\n\n... (${lines.length - limit} more lines)`,
+                            success: true
+                        };
                     }
                     return { result: content, success: true };
                 }
@@ -690,17 +736,17 @@ ${summary}
                     return new Promise((resolve) => {
                         exec(params.command, {
                             cwd: workspacePath,
-                            timeout: 120000,
-                            maxBuffer: 10 * 1024 * 1024
+                            timeout: CONFIG.COMMAND_TIMEOUT_MS,
+                            maxBuffer: CONFIG.MAX_BUFFER_SIZE
                         }, (error, stdout, stderr) => {
                             const output = (stdout + stderr).trim();
                             const exitCode = error?.code ?? 0;
-                            // Reduced from 5000 to 2000 to save tokens
-                            const truncated = output.length > 2000
-                                ? output.substring(0, 2000) + '\n... (truncated)'
+                            const limit = CONFIG.LIMITS.COMMAND_OUTPUT;
+                            const truncated = output.length > limit
+                                ? output.substring(0, limit) + '\n... (truncated)'
                                 : output;
                             resolve({
-                                result: truncated + `\n[exit: ${exitCode}]`,
+                                result: `${truncated}\n[exit: ${exitCode}]`,
                                 success: exitCode === 0
                             });
                         });
@@ -713,32 +759,40 @@ ${summary}
                     }
                     const searchPath = path.join(workspacePath, params.path || "");
                     const results: string[] = [];
+                    const maxResults = CONFIG.LIMITS.SEARCH_RESULTS;
+                    const queryLower = params.query.toLowerCase();
+                    const skipDirs = new Set(['.git', 'node_modules', '.next', 'dist', 'build', '__pycache__']);
 
-                    const searchDir = (dir: string) => {
-                        if (results.length >= 20) return; // Reduced from 50
+                    const searchDir = (dir: string): void => {
+                        if (results.length >= maxResults) return;
+
+                        let items;
                         try {
-                            const items = fs.readdirSync(dir, { withFileTypes: true });
-                            for (const item of items) {
-                                if (results.length >= 20) break;
-                                if (item.name.startsWith('.') || item.name === 'node_modules') continue;
+                            items = fs.readdirSync(dir, { withFileTypes: true });
+                        } catch { return; }
 
-                                const fullPath = path.join(dir, item.name);
-                                if (item.isDirectory()) {
-                                    searchDir(fullPath);
-                                } else if (item.isFile()) {
-                                    try {
-                                        const content = fs.readFileSync(fullPath, 'utf-8');
-                                        const lines = content.split('\n');
-                                        lines.forEach((line, idx) => {
-                                            if (line.toLowerCase().includes(params.query.toLowerCase())) {
-                                                const relPath = path.relative(workspacePath, fullPath);
-                                                results.push(`${relPath}:${idx + 1}: ${line.trim().substring(0, 100)}`);
-                                            }
-                                        });
-                                    } catch {}
-                                }
+                        for (const item of items) {
+                            if (results.length >= maxResults) return;
+                            if (item.name.startsWith('.') || skipDirs.has(item.name)) continue;
+
+                            const fullPath = path.join(dir, item.name);
+
+                            if (item.isDirectory()) {
+                                searchDir(fullPath);
+                            } else if (item.isFile()) {
+                                try {
+                                    const content = fs.readFileSync(fullPath, 'utf-8');
+                                    const lines = content.split('\n');
+                                    const relPath = path.relative(workspacePath, fullPath);
+
+                                    for (let idx = 0; idx < lines.length && results.length < maxResults; idx++) {
+                                        if (lines[idx].toLowerCase().includes(queryLower)) {
+                                            results.push(`${relPath}:${idx + 1}: ${lines[idx].trim().substring(0, 100)}`);
+                                        }
+                                    }
+                                } catch {}
                             }
-                        } catch {}
+                        }
                     };
 
                     searchDir(searchPath);
@@ -759,42 +813,9 @@ ${summary}
     async sendMessage(userMessage: string, images?: Array<{data: string, type: string}>): Promise<string> {
         const config = this.getConfig();
 
-        // Build user message content with images if present
-        let userContent: any;
-        if (images && images.length > 0) {
-            console.log('ClaudioAI: Processing', images.length, 'images');
-            userContent = [
-                ...images.map((img, idx) => {
-                    // Clean base64 data - remove any whitespace/newlines
-                    const cleanData = img.data.replace(/\s/g, '');
-
-                    // Normalize media type - API only accepts: image/jpeg, image/png, image/gif, image/webp
-                    let mediaType = img.type.toLowerCase();
-                    if (mediaType === 'image/jpg') {
-                        mediaType = 'image/jpeg';
-                    }
-                    // Ensure it's a valid type
-                    const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-                    if (!validTypes.includes(mediaType)) {
-                        mediaType = 'image/png'; // Default to PNG
-                    }
-
-                    console.log(`ClaudioAI: Image ${idx + 1} - type: ${mediaType}, data length: ${cleanData.length}`);
-                    return {
-                        type: 'image',
-                        source: {
-                            type: 'base64',
-                            media_type: mediaType,
-                            data: cleanData
-                        }
-                    };
-                }),
-                { type: 'text', text: userMessage || 'Descreva esta imagem.' }
-            ];
-            console.log('ClaudioAI: Final content blocks:', userContent.length);
-        } else {
-            userContent = userMessage;
-        }
+        const userContent = images?.length
+            ? this.buildImageContent(images, userMessage)
+            : userMessage;
 
         this.messages.push({ role: 'user', content: userContent });
 
@@ -802,15 +823,12 @@ ${summary}
         this.compactHistory();
 
         let iterations = 0;
-        const maxIterations = 20;
         let truncationRetries = 0;
-        const maxTruncationRetries = 2;
-
         let lastTextContent = '';
 
-        while (iterations < maxIterations) {
+        while (iterations < CONFIG.MAX_ITERATIONS) {
             iterations++;
-            console.log(`ClaudioAI: Iteration ${iterations}/${maxIterations}`);
+            console.log(`ClaudioAI: Iteration ${iterations}/${CONFIG.MAX_ITERATIONS}`);
 
             let response;
             try {
@@ -841,8 +859,8 @@ ${summary}
                 this.billingInputTokens += inputTokens;
                 this.billingOutputTokens += outputTokens;
 
-                const percentUsed = Math.round((inputTokens / MAX_CONTEXT_TOKENS) * 100);
-                console.log(`ClaudioAI Context: ${inputTokens.toLocaleString()} in, ${outputTokens.toLocaleString()} out (${percentUsed}% of 200K) | Cache: ${cacheRead.toLocaleString()} read`);
+                const percentUsed = Math.round((inputTokens / CONFIG.MAX_CONTEXT_TOKENS) * 100);
+                console.log(`ClaudioAI: ${inputTokens.toLocaleString()} in, ${outputTokens.toLocaleString()} out (${percentUsed}%) | Cache: ${cacheRead.toLocaleString()}`);
 
                 if (this.onTokenUpdate) {
                     this.onTokenUpdate(this.getTokenUsage());
@@ -861,15 +879,13 @@ ${summary}
                 }
             }
 
-            // Check for truncated tool_use (missing required params due to max_tokens)
-            if (response.stop_reason === 'max_tokens' && toolCalls.length > 0 && truncationRetries < maxTruncationRetries) {
+            // Handle truncated responses that cut off tool parameters
+            if (response.stop_reason === 'max_tokens' && toolCalls.length > 0 && truncationRetries < CONFIG.MAX_TRUNCATION_RETRIES) {
                 const lastTool = toolCalls[toolCalls.length - 1];
-                const input = lastTool.input || {};
 
-                // Check if write_file is missing content (truncated)
-                if (lastTool.name === 'write_file' && !input.content) {
+                if (lastTool.name === 'write_file' && !lastTool.input?.content) {
                     truncationRetries++;
-                    console.log(`ClaudioAI: Detected truncated write_file (retry ${truncationRetries}/${maxTruncationRetries})`);
+                    console.log(`ClaudioAI: Truncated write_file (retry ${truncationRetries}/${CONFIG.MAX_TRUNCATION_RETRIES})`);
 
                     // Add the truncated response to history
                     this.messages.push({ role: 'assistant', content: response.content });
@@ -914,15 +930,12 @@ ${summary}
                 return lastTextContent;
             }
 
-            // Execute tools (with plan mode restrictions)
-            const toolResults: any[] = [];
-            const readOnlyTools = ['list_files', 'read_file', 'search_files'];
+            const toolResults: Array<{ type: string; tool_use_id: string; content: string }> = [];
 
             for (const tool of toolCalls) {
-                console.log(`ClaudioAI: Tool requested: ${tool.name}`, JSON.stringify(tool.input || {}, null, 2));
+                console.log(`ClaudioAI: Tool ${tool.name}`, JSON.stringify(tool.input || {}));
 
-                // In plan mode, only allow read-only tools
-                if (this.mode.planMode && !readOnlyTools.includes(tool.name)) {
+                if (this.mode.planMode && !CONFIG.READ_ONLY_TOOLS.includes(tool.name)) {
                     console.log(`ClaudioAI: Plan mode - blocking ${tool.name}`);
 
                     if (this.onToolStart) {
@@ -965,24 +978,19 @@ ${summary}
         return lastTextContent || "Max iterations reached";
     }
 
-    private makeRequest(config: any): Promise<any> {
-        // Build system prompt based on mode
-        let modeInstructions = '';
-        if (this.mode.planMode) {
-            modeInstructions = `
+    private async makeRequest(config: ApiConfig): Promise<any> {
+        const modeInstructions = this.mode.planMode ? `
 
 MODE: PLAN MODE (Active)
 - You CAN use read-only tools: list_files, read_file, search_files
 - You CANNOT execute: write_file, edit_file, run_command (will be simulated)
 - Analyze the codebase and create a detailed step-by-step plan
 - Explain what changes you WOULD make and why
-- Be specific about files and code modifications`;
-        }
+- Be specific about files and code modifications` : '';
 
-        const systemPrompt = [
-            {
-                type: "text",
-                text: `You are ClaudioAI, a concise coding assistant with filesystem access.
+        const systemPrompt = [{
+            type: "text",
+            text: `You are ClaudioAI, a concise coding assistant with filesystem access.
 
 RULES:
 1. Use tools immediately when asked to do something
@@ -990,93 +998,41 @@ RULES:
 3. Respond in the user's language${modeInstructions}
 
 WORKSPACE: ${this.getWorkspacePath()}`,
-                cache_control: { type: "ephemeral" }
-            }
-        ];
+            cache_control: { type: "ephemeral" }
+        }];
 
-        // Add cache control to tools
         const cachedTools = TOOLS.map((tool, i) =>
             i === TOOLS.length - 1
                 ? { ...tool, cache_control: { type: "ephemeral" } }
                 : tool
         );
 
-        // Optimize messages - truncate old tool results
-        const optimizedMessages = this.optimizeMessages();
-
         const body = JSON.stringify({
             model: config.model,
             max_tokens: 8192,
             system: systemPrompt,
             tools: cachedTools,
-            messages: optimizedMessages
+            messages: this.optimizeMessages()
         });
 
-        return new Promise((resolve, reject) => {
-            const url = new URL(config.apiUrl + '/v1/messages');
-            const lib = url.protocol === 'https:' ? https : http;
+        console.log(`ClaudioAI: Request size: ${body.length} bytes`);
 
-            const req = lib.request({
-                hostname: url.hostname,
-                port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                path: url.pathname,
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': config.apiKey,
-                    'anthropic-version': '2023-06-01',
-                    'anthropic-beta': 'prompt-caching-2024-07-31'
-                }
-            }, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try {
-                        const json = JSON.parse(data);
+        const { statusCode, data } = await this.httpPost(
+            `${config.apiUrl}/v1/messages`,
+            body,
+            config.apiKey,
+            { 'anthropic-beta': 'prompt-caching-2024-07-31' }
+        );
 
-                        if (res.statusCode !== 200) {
-                            console.error('ClaudioAI API Error:', res.statusCode, data);
-                            const errorMsg = json.error?.message || json.message || JSON.stringify(json).substring(0, 200) || `HTTP ${res.statusCode}`;
-                            reject(new Error(`HTTP ${res.statusCode}: ${errorMsg}`));
-                            return;
-                        }
+        if (statusCode !== 200) {
+            const errorMsg = data.error?.message || data.message || JSON.stringify(data).substring(0, 200);
+            throw new Error(`HTTP ${statusCode}: ${errorMsg}`);
+        }
 
-                        if (json.error) {
-                            reject(new Error(json.error.message || 'API Error'));
-                            return;
-                        }
+        if (data.error) {
+            throw new Error(data.error.message || 'API Error');
+        }
 
-                        // Log tool_use blocks for debugging
-                        if (json.content) {
-                            for (const block of json.content) {
-                                if (block.type === 'tool_use') {
-                                    console.log(`ClaudioAI: API returned tool_use: ${block.name}`,
-                                        `input keys: [${Object.keys(block.input || {}).join(', ')}]`,
-                                        `input size: ${JSON.stringify(block.input || {}).length} bytes`);
-                                }
-                            }
-                        }
-
-                        resolve(json);
-                    } catch (e) {
-                        reject(new Error(`Failed to parse response: ${data.substring(0, 100)}`));
-                    }
-                });
-            });
-
-            req.on('error', (e) => reject(new Error(`Network error: ${e.message}`)));
-
-            // Set timeout for the request (120 seconds)
-            req.setTimeout(120000, () => {
-                req.destroy();
-                reject(new Error('Request timeout: API took too long to respond (120s)'));
-            });
-
-            // Log request size for debugging
-            console.log(`ClaudioAI: Sending request, body size: ${body.length} bytes`);
-
-            req.write(body);
-            req.end();
-        });
+        return data;
     }
 }
