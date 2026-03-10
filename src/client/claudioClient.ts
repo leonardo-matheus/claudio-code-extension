@@ -341,6 +341,7 @@ ${workspacePath}
         let assistantContent: ContentBlock[] = [];
         let inThinking = false;
         let inText = false;
+        let streamedChars = 0;
 
         res.on('data', (chunk) => {
           buffer += chunk.toString();
@@ -376,13 +377,28 @@ ${workspacePath}
                   }
                   break;
 
+                case 'message_start':
+                  if (event.message?.usage?.input_tokens) {
+                    this.currentTokens.input = event.message.usage.input_tokens;
+                    this.onTokenUpdate?.(this.getTokenUsage());
+                  }
+                  break;
+
                 case 'content_block_delta':
                   if (event.delta?.type === 'thinking_delta') {
                     currentThinking += event.delta.thinking;
+                    streamedChars += event.delta.thinking?.length || 0;
                     this.onThinkingUpdate?.(event.delta.thinking);
+                    // Estimate tokens (~4 chars per token)
+                    this.currentTokens.output = Math.round(streamedChars / 4);
+                    this.onTokenUpdate?.(this.getTokenUsage());
                   } else if (event.delta?.type === 'text_delta') {
                     currentText += event.delta.text;
+                    streamedChars += event.delta.text?.length || 0;
                     this.onTextDelta?.(event.delta.text);
+                    // Estimate tokens (~4 chars per token)
+                    this.currentTokens.output = Math.round(streamedChars / 4);
+                    this.onTokenUpdate?.(this.getTokenUsage());
                   } else if (event.delta?.type === 'input_json_delta' && toolCalls.length > 0) {
                     const lastTool = toolCalls[toolCalls.length - 1];
                     if (!lastTool._inputJson) lastTool._inputJson = '';
