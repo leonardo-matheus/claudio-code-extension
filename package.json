@@ -1,9 +1,9 @@
 {
-  "name": "claudioai",
-  "displayName": "ClaudioAI",
-  "description": "AI assistant powered by Claude - Chat, code generation, and more",
-  "version": "1.0.0",
-  "publisher": "claudioai",
+  "name": "claudio-code",
+  "displayName": "Claudio Code",
+  "description": "AI coding assistant with terminal, files, and Git access",
+  "version": "2.0.0",
+  "publisher": "leonardomth",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -18,155 +18,130 @@
     "claude",
     "copilot",
     "chat",
-    "code generation"
+    "code generation",
+    "assistant"
   ],
+  "icon": "media/icon.png",
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "claudioai-sidebar",
-          "title": "ClaudioAI",
-          "icon": "resources/icon.svg"
+          "id": "claudio-code-sidebar",
+          "title": "Claudio Code",
+          "icon": "media/sidebar-icon.svg"
         }
       ]
     },
     "views": {
-      "claudioai-sidebar": [
+      "claudio-code-sidebar": [
         {
           "type": "webview",
-          "id": "claudioai.chatView",
+          "id": "claudio-code.chatView",
           "name": "Chat"
         }
       ]
     },
     "commands": [
       {
-        "command": "claudioai.openChat",
-        "title": "Open ClaudioAI Chat",
-        "category": "ClaudioAI"
+        "command": "claudio-code.openChat",
+        "title": "Open Claudio Code Chat",
+        "category": "Claudio Code",
+        "icon": "$(comment-discussion)"
       },
       {
-        "command": "claudioai.newChat",
+        "command": "claudio-code.newChat",
         "title": "New Chat",
-        "category": "ClaudioAI",
+        "category": "Claudio Code",
         "icon": "$(add)"
       },
       {
-        "command": "claudioai.explainCode",
-        "title": "Explain Code",
-        "category": "ClaudioAI"
-      },
-      {
-        "command": "claudioai.refactorCode",
-        "title": "Refactor Code",
-        "category": "ClaudioAI"
-      },
-      {
-        "command": "claudioai.fixCode",
-        "title": "Fix Code",
-        "category": "ClaudioAI"
-      },
-      {
-        "command": "claudioai.generateTests",
-        "title": "Generate Tests",
-        "category": "ClaudioAI"
-      },
-      {
-        "command": "claudioai.addDocumentation",
-        "title": "Add Documentation",
-        "category": "ClaudioAI"
+        "command": "claudio-code.openSettings",
+        "title": "Open Settings",
+        "category": "Claudio Code",
+        "icon": "$(gear)"
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "submenu": "claudioai.submenu",
-          "group": "claudioai"
-        }
-      ],
-      "claudioai.submenu": [
-        {
-          "command": "claudioai.explainCode",
-          "group": "1_actions"
-        },
-        {
-          "command": "claudioai.refactorCode",
-          "group": "1_actions"
-        },
-        {
-          "command": "claudioai.fixCode",
-          "group": "1_actions"
-        },
-        {
-          "command": "claudioai.generateTests",
-          "group": "2_generate"
-        },
-        {
-          "command": "claudioai.addDocumentation",
-          "group": "2_generate"
-        }
-      ],
       "view/title": [
         {
-          "command": "claudioai.newChat",
-          "when": "view == claudioai.chatView",
+          "command": "claudio-code.newChat",
+          "when": "view == claudio-code.chatView",
           "group": "navigation"
         }
       ]
     },
-    "submenus": [
-      {
-        "id": "claudioai.submenu",
-        "label": "ClaudioAI"
-      }
-    ],
     "keybindings": [
       {
-        "command": "claudioai.openChat",
+        "command": "claudio-code.openChat",
         "key": "ctrl+shift+c",
         "mac": "cmd+shift+c"
       }
     ],
     "configuration": {
-      "title": "ClaudioAI",
+      "title": "Claudio Code",
       "properties": {
-        "claudioai.apiKey": {
+        "claudioCode.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Custom API Key (optional - uses built-in key if empty)"
+          "description": "Your ClaudioAI API Key (sk-claudio-xxx)",
+          "order": 1
         },
-        "claudioai.apiUrl": {
+        "claudioCode.apiUrl": {
           "type": "string",
-          "default": "",
-          "description": "Custom API URL (optional)"
+          "default": "https://claudioai.dev",
+          "description": "ClaudioAI API URL",
+          "order": 2
         },
-        "claudioai.model": {
+        "claudioCode.model": {
           "type": "string",
           "default": "claude-opus-4-5",
-          "enum": ["claude-opus-4-5", "gpt-4.1", "gpt-5-codex", "o1"],
-          "enumDescriptions": ["Claude Opus 4.5", "GPT-4.1", "GPT-5 Codex", "O1"],
-          "description": "Default model to use"
+          "enum": [
+            "claude-opus-4-5",
+            "gpt-4.1",
+            "gpt-5-codex",
+            "o1"
+          ],
+          "enumDescriptions": [
+            "Claude Opus 4.5 (Anthropic - Recommended)",
+            "GPT-4.1 (OpenAI)",
+            "GPT-5 Codex (OpenAI - 128k tokens)",
+            "O1 (OpenAI - Free)"
+          ],
+          "description": "AI model to use",
+          "order": 3
+        },
+        "claudioCode.maxTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum response tokens",
+          "order": 4
+        },
+        "claudioCode.bypassPermissions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve all actions without confirmation",
+          "order": 5
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.19.12",
     "typescript": "^5.3.0"
   },
-  "dependencies": {
-    "marked": "^11.0.0"
-  }
+  "dependencies": {}
 }

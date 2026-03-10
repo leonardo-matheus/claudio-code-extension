@@ -1,7 +1,16 @@
 .vscode/**
 .vscode-test/**
 src/**
+out/**
+node_modules/**
 .gitignore
 *.map
-node_modules/**
 tsconfig.json
+esbuild.js
+*.vsix
+*.zip
+.git/**
+install.sh
+install.bat
+install-claudioai.ps1
+Claudio-AI.zip
