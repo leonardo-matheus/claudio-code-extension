@@ -560,6 +560,15 @@ ${summary}
     async executeTool(name: string, params: any): Promise<{ result: string; success: boolean }> {
         const workspacePath = this.getWorkspacePath();
 
+        // Ensure params is always an object
+        if (!params || typeof params !== 'object') {
+            console.error(`ClaudioAI: Invalid params for ${name}:`, params);
+            params = {};
+        }
+
+        // Log params for debugging
+        console.log(`ClaudioAI: executeTool(${name}) params:`, JSON.stringify(params, null, 2));
+
         try {
             switch (name) {
                 case "list_files": {
@@ -597,7 +606,11 @@ ${summary}
                         return { result: "Error: path is required", success: false };
                     }
                     if (params.content === undefined || params.content === null) {
-                        return { result: "Error: content is required", success: false };
+                        console.error(`ClaudioAI: write_file missing content. Received params:`, JSON.stringify(params));
+                        return {
+                            result: `Error: content is required for write_file. Received only: ${Object.keys(params).join(', ')}. Please try again.`,
+                            success: false
+                        };
                     }
                     const content = String(params.content);
 
@@ -877,7 +890,7 @@ ${summary}
             const readOnlyTools = ['list_files', 'read_file', 'search_files'];
 
             for (const tool of toolCalls) {
-                console.log(`ClaudioAI: Tool requested: ${tool.name}`);
+                console.log(`ClaudioAI: Tool requested: ${tool.name}`, JSON.stringify(tool.input || {}, null, 2));
 
                 // In plan mode, only allow read-only tools
                 if (this.mode.planMode && !readOnlyTools.includes(tool.name)) {
@@ -964,7 +977,7 @@ WORKSPACE: ${this.getWorkspacePath()}`,
 
         const body = JSON.stringify({
             model: config.model,
-            max_tokens: 4096,
+            max_tokens: 8192,
             system: systemPrompt,
             tools: cachedTools,
             messages: optimizedMessages
@@ -1002,6 +1015,17 @@ WORKSPACE: ${this.getWorkspacePath()}`,
                         if (json.error) {
                             reject(new Error(json.error.message || 'API Error'));
                             return;
+                        }
+
+                        // Log tool_use blocks for debugging
+                        if (json.content) {
+                            for (const block of json.content) {
+                                if (block.type === 'tool_use') {
+                                    console.log(`ClaudioAI: API returned tool_use: ${block.name}`,
+                                        `input keys: [${Object.keys(block.input || {}).join(', ')}]`,
+                                        `input size: ${JSON.stringify(block.input || {}).length} bytes`);
+                                }
+                            }
                         }
 
                         resolve(json);
