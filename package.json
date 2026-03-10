@@ -2,7 +2,7 @@
   "name": "claudio-code",
   "displayName": "Claudio Code",
   "description": "AI coding assistant with terminal, files, and Git access",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "publisher": "leonardomth",
   "license": "MIT",
   "engines": {
@@ -98,18 +98,18 @@
         },
         "claudioCode.model": {
           "type": "string",
-          "default": "claude-opus-4-5",
+          "default": "o1",
           "enum": [
+            "o1",
             "claude-opus-4-5",
             "gpt-4.1",
-            "gpt-5-codex",
-            "o1"
+            "gpt-5-codex"
           ],
           "enumDescriptions": [
-            "Claude Opus 4.5 (Anthropic - Recommended)",
-            "GPT-4.1 (OpenAI)",
-            "GPT-5 Codex (OpenAI - 128k tokens)",
-            "O1 (OpenAI - Free)"
+            "OpenAI O1 (Free - 10k tokens/min)",
+            "Claude Opus 4.5 (Anthropic - 64k tokens/min)",
+            "GPT-4.1 (OpenAI - 16k tokens/min)",
+            "GPT-5 Codex (OpenAI - 128k tokens/min)"
           ],
           "description": "AI model to use",
           "order": 3

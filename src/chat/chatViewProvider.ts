@@ -69,6 +69,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'deleteChat': this.deleteChat(data.id); break;
         case 'toggleBypass': this._bypassPermissions = data.enabled; this._toolExecutor.setBypassPermissions(data.enabled); break;
         case 'openSettings': vscode.commands.executeCommand('workbench.action.openSettings', 'claudioCode'); break;
+        case 'openGetKey': vscode.env.openExternal(vscode.Uri.parse('https://claudioai.dev/')); break;
         case 'attachFile': this.handleAttachFile(); break;
         case 'ready': this.sendInitialState(); break;
       }
@@ -171,6 +172,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._view?.webview.postMessage({ type: 'setBypass', enabled: this._bypassPermissions });
     const editor = vscode.window.activeTextEditor;
     if (editor) this._view?.webview.postMessage({ type: 'currentFile', fileName: editor.document.fileName.split('/').pop() });
+
+    // Check if API key is configured
+    const apiKey = vscode.workspace.getConfiguration('claudioCode').get<string>('apiKey') || '';
+    this._view?.webview.postMessage({ type: 'apiKeyStatus', hasKey: apiKey.length > 0 });
   }
 
   private loadChatHistory() {
@@ -313,6 +318,14 @@ body{font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text2);text-align:center;padding:40px}
 .empty-title{font-size:18px;font-weight:600;margin-bottom:8px;color:var(--text)}
 .empty-sub{font-size:12px;max-width:240px}
+.no-key{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text);text-align:center;padding:40px;gap:16px}
+.no-key-icon{font-size:48px;margin-bottom:8px}
+.no-key-title{font-size:20px;font-weight:600;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.no-key-sub{font-size:13px;color:var(--text2);max-width:260px;line-height:1.5}
+.no-key-btn{background:linear-gradient(135deg,var(--accent) 0%,#7c3aed 100%);border:none;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 4px 12px rgba(139,92,246,.3)}
+.no-key-btn:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(139,92,246,.4)}
+.no-key-btn.secondary{background:var(--bg3);color:var(--text);box-shadow:none;padding:10px 20px;font-size:13px}
+.no-key-btn.secondary:hover{background:var(--border)}
 .input-area{padding:12px 16px;background:var(--bg);border-top:1px solid var(--border)}
 .attachments{display:none;padding:8px 0;flex-wrap:wrap;gap:8px}
 .attachments.show{display:flex}
@@ -363,6 +376,13 @@ body{font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 <div class="empty-title">Ask Claudio to help...</div>
 <div class="empty-sub">I can read, write, edit files, run commands and more.</div>
 </div>
+<div class="no-key" id="noKeyState" style="display:none">
+<div class="no-key-icon">🔑</div>
+<div class="no-key-title">API Key Required</div>
+<div class="no-key-sub">Create your free account and get your API key. Model O1 is completely free!</div>
+<button class="no-key-btn" id="getKeyBtn">Get API Key</button>
+<button class="no-key-btn secondary" id="configKeyBtn">I have a key</button>
+</div>
 </div>
 <div class="input-area">
 <div class="attachments" id="attachments"></div>
@@ -392,6 +412,8 @@ chatDropdown.onclick=()=>chatList.classList.toggle('open');
 document.addEventListener('click',e=>{if(!chatDropdown.contains(e.target)&&!chatList.contains(e.target))chatList.classList.remove('open')});
 $('newChatBtn').onclick=()=>vscode.postMessage({type:'newChat'});
 $('settingsBtn').onclick=()=>vscode.postMessage({type:'openSettings'});
+$('getKeyBtn').onclick=()=>vscode.postMessage({type:'openGetKey'});
+$('configKeyBtn').onclick=()=>vscode.postMessage({type:'openSettings'});
 bypass.onclick=()=>{bypassOn=!bypassOn;bypass.classList.toggle('on',bypassOn);vscode.postMessage({type:'toggleBypass',enabled:bypassOn})};
 attachBtn.onclick=()=>vscode.postMessage({type:'attachFile'});
 function renderAtts(){
@@ -612,6 +634,11 @@ window.addEventListener('message',e=>{
     case'setBypass':bypassOn=d.enabled;bypass.classList.toggle('on',bypassOn);break;
     case'tokenUpdate':updateTokenDisplay(d.usage.totalTokens);break;
     case'filesAttached':for(const a of d.attachments)atts.push(a);renderAtts();break;
+    case'apiKeyStatus':
+      const noKey=$('noKeyState'),empty=$('emptyState');
+      if(d.hasKey){noKey.style.display='none';empty.style.display='flex'}
+      else{noKey.style.display='flex';empty.style.display='none'}
+      break;
   }
 });
 vscode.postMessage({type:'ready'});

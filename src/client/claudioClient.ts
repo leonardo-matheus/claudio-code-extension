@@ -156,7 +156,7 @@ export class ClaudioClient {
     return {
       apiKey: config.get<string>('apiKey') || '',
       apiUrl: config.get<string>('apiUrl') || 'https://claudioai.dev',
-      model: config.get<string>('model') || 'claude-opus-4-5',
+      model: config.get<string>('model') || 'o1',
       maxTokens: config.get<number>('maxTokens') || 8192,
     };
   }
