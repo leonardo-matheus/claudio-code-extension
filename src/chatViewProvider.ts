@@ -1410,8 +1410,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <div class="header-actions">
             <select class="model-select" id="modelSelect" title="Select model">
                 <option value="claude-opus-4-5">Claude Opus 4.5</option>
-                <option value="claude-sonnet-4">Claude Sonnet 4</option>
-                <option value="claude-haiku-3-5">Claude Haiku 3.5</option>
+                <option value="gpt-4.1">GPT-4.1</option>
+                <option value="gpt-5-codex">GPT-5 Codex</option>
+                <option value="o1">O1</option>
             </select>
             <button class="btn btn-ghost" id="compactBtn" title="Compact history">🗜️</button>
             <button class="btn btn-primary" id="newChatBtn">+ New Chat</button>
