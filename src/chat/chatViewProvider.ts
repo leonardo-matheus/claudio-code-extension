@@ -63,6 +63,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       switch (data.type) {
         case 'sendMessage': await this.handleMessage(data.text, data.images); break;
         case 'newChat': this.newChat(); break;
+        case 'createFile': await this.createFileFromCode(data.code, data.ext); break;
         case 'stopGeneration': this._client.abort(); this._view?.webview.postMessage({ type: 'stopped' }); break;
         case 'selectChat': this.selectChat(data.id); break;
         case 'deleteChat': this.deleteChat(data.id); break;
@@ -72,6 +73,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'ready': this.sendInitialState(); break;
       }
     });
+  }
+
+  private async createFileFromCode(code: string, ext: string) {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const defaultName = `new_file${ext}`;
+
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: workspacePath ? vscode.Uri.file(`${workspacePath}/${defaultName}`) : undefined,
+      filters: { 'All Files': ['*'] },
+    });
+
+    if (uri) {
+      const fs = require('fs');
+      fs.writeFileSync(uri.fsPath, code);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc);
+      vscode.window.showInformationMessage(`File created: ${uri.fsPath.split('/').pop()}`);
+    }
   }
 
   private async handleAttachFile() {
@@ -237,6 +256,20 @@ body{font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 .text-content a{color:var(--accent2)}
 .text-content strong{font-weight:600;color:var(--accent2)}
 .text-content code{background:var(--bg3);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:12px;color:#e879f9}
+.code-block{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:12px;margin:12px 0;border:1px solid var(--border);overflow:hidden}
+.code-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:rgba(0,0,0,.3);border-bottom:1px solid var(--border);cursor:pointer}
+.code-header-left{display:flex;align-items:center;gap:8px}
+.code-lang{font-size:10px;color:var(--accent2);text-transform:uppercase;letter-spacing:1px}
+.code-arrow{font-size:10px;color:var(--text2);transition:transform .2s}
+.code-arrow.exp{transform:rotate(180deg)}
+.code-actions{display:flex;gap:4px}
+.code-btn{background:rgba(255,255,255,.1);border:none;color:var(--text2);padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;transition:all .15s}
+.code-btn:hover{background:rgba(255,255,255,.2);color:var(--text)}
+.code-btn.copied{background:var(--success);color:#fff}
+.code-content{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.code-content.exp{max-height:2000px}
+.code-content pre{margin:0;padding:16px;overflow-x:auto}
+.code-content pre code{background:none;padding:0;color:#e8e8e8;font-size:13px;line-height:1.5}
 .text-content pre{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:12px;padding:16px;margin:12px 0;overflow-x:auto;border:1px solid var(--border);position:relative}
 .text-content pre::before{content:attr(data-lang);position:absolute;top:8px;right:12px;font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
 .text-content pre code{background:none;padding:0;color:#e8e8e8;font-size:13px;line-height:1.5}
@@ -488,12 +521,16 @@ function updateTokenDisplay(n){
   totalTokens=n;
   if(loadingEl){const el=loadingEl.querySelector('#tokenVal');if(el)el.textContent=n.toLocaleString()}
 }
+let codeBlockId=0;
 function formatMD(text){
   if(!text)return'';
-  // Code blocks with language
+  // Code blocks with language - collapsible
   text=text.replace(/\`\`\`(\\w*)\\n([\\s\\S]*?)\`\`\`/g,(m,lang,code)=>{
+    const id='cb'+(codeBlockId++);
     const highlighted=highlightCode(code,lang);
-    return '<pre data-lang="'+(lang||'code')+'"><code>'+highlighted+'</code></pre>';
+    const escaped=code.replace(/'/g,"\\'").replace(/\\n/g,'\\\\n');
+    const ext=lang==='javascript'||lang==='js'?'.js':lang==='typescript'||lang==='ts'?'.ts':lang==='python'||lang==='py'?'.py':lang==='html'?'.html':lang==='css'?'.css':lang==='json'?'.json':lang==='bash'||lang==='sh'?'.sh':'.txt';
+    return '<div class="code-block" id="'+id+'"><div class="code-header" onclick="toggleCode(\\''+id+'\\')"><div class="code-header-left"><span class="code-arrow">▼</span><span class="code-lang">'+(lang||'code')+'</span></div><div class="code-actions"><button class="code-btn" onclick="event.stopPropagation();copyCode(\\''+id+'\\',this)">Copy</button><button class="code-btn" onclick="event.stopPropagation();createFile(\\''+escaped+'\\',\\''+ext+'\\')">Create File</button></div></div><div class="code-content"><pre><code>'+highlighted+'</code></pre></div></div>';
   });
   text=text.replace(/\`([^\`]+)\`/g,'<code>$1</code>');
   text=text.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
@@ -513,6 +550,28 @@ function highlightCode(code,lang){
   result=result.replace(/\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b/g,(m,w)=>kwSet.has(w)?'<span class="hljs-keyword">'+w+'</span>':typeSet.has(w)?'<span class="hljs-type">'+w+'</span>':w);
   result=result.replace(/([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(/g,'<span class="hljs-function">$1</span>(');
   return result;
+}
+function toggleCode(id){
+  const block=document.getElementById(id);
+  if(!block)return;
+  const arrow=block.querySelector('.code-arrow');
+  const content=block.querySelector('.code-content');
+  arrow.classList.toggle('exp');
+  content.classList.toggle('exp');
+}
+function copyCode(id,btn){
+  const block=document.getElementById(id);
+  if(!block)return;
+  const code=block.querySelector('code').textContent;
+  navigator.clipboard.writeText(code).then(()=>{
+    btn.textContent='Copied!';
+    btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('copied')},1500);
+  });
+}
+function createFile(code,ext){
+  const decoded=code.replace(/\\\\n/g,'\\n').replace(/\\\\'/g,"'");
+  vscode.postMessage({type:'createFile',code:decoded,ext:ext});
 }
 let scrollTimer=null;
 function scroll(){

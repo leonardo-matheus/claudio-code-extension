@@ -342,6 +342,7 @@ ${workspacePath}
         let inThinking = false;
         let inText = false;
         let streamedChars = 0;
+        let lastTokenUpdate = 0;
 
         res.on('data', (chunk) => {
           buffer += chunk.toString();
@@ -389,16 +390,24 @@ ${workspacePath}
                     currentThinking += event.delta.thinking;
                     streamedChars += event.delta.thinking?.length || 0;
                     this.onThinkingUpdate?.(event.delta.thinking);
-                    // Estimate tokens (~4 chars per token)
-                    this.currentTokens.output = Math.round(streamedChars / 4);
-                    this.onTokenUpdate?.(this.getTokenUsage());
+                    // Throttle token updates (every 500ms)
+                    const now = Date.now();
+                    if (now - lastTokenUpdate > 500) {
+                      this.currentTokens.output = Math.round(streamedChars / 4);
+                      this.onTokenUpdate?.(this.getTokenUsage());
+                      lastTokenUpdate = now;
+                    }
                   } else if (event.delta?.type === 'text_delta') {
                     currentText += event.delta.text;
                     streamedChars += event.delta.text?.length || 0;
                     this.onTextDelta?.(event.delta.text);
-                    // Estimate tokens (~4 chars per token)
-                    this.currentTokens.output = Math.round(streamedChars / 4);
-                    this.onTokenUpdate?.(this.getTokenUsage());
+                    // Throttle token updates (every 500ms)
+                    const nowText = Date.now();
+                    if (nowText - lastTokenUpdate > 500) {
+                      this.currentTokens.output = Math.round(streamedChars / 4);
+                      this.onTokenUpdate?.(this.getTokenUsage());
+                      lastTokenUpdate = nowText;
+                    }
                   } else if (event.delta?.type === 'input_json_delta' && toolCalls.length > 0) {
                     const lastTool = toolCalls[toolCalls.length - 1];
                     if (!lastTool._inputJson) lastTool._inputJson = '';
