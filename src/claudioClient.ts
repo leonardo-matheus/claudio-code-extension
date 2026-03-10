@@ -803,6 +803,8 @@ ${summary}
 
         let iterations = 0;
         const maxIterations = 20;
+        let truncationRetries = 0;
+        const maxTruncationRetries = 2;
 
         let lastTextContent = '';
 
@@ -860,13 +862,14 @@ ${summary}
             }
 
             // Check for truncated tool_use (missing required params due to max_tokens)
-            if (response.stop_reason === 'max_tokens' && toolCalls.length > 0) {
+            if (response.stop_reason === 'max_tokens' && toolCalls.length > 0 && truncationRetries < maxTruncationRetries) {
                 const lastTool = toolCalls[toolCalls.length - 1];
                 const input = lastTool.input || {};
 
                 // Check if write_file is missing content (truncated)
                 if (lastTool.name === 'write_file' && !input.content) {
-                    console.log('ClaudioAI: Detected truncated write_file, asking for incremental approach');
+                    truncationRetries++;
+                    console.log(`ClaudioAI: Detected truncated write_file (retry ${truncationRetries}/${maxTruncationRetries})`);
 
                     // Add the truncated response to history
                     this.messages.push({ role: 'assistant', content: response.content });
@@ -877,7 +880,7 @@ ${summary}
                         content: [{
                             type: 'tool_result',
                             tool_use_id: lastTool.id,
-                            content: 'Error: Response was truncated. The file content is too large to write at once. Please use edit_file to make incremental changes to the existing file, or split the changes into smaller parts.'
+                            content: 'Error: Response was truncated. The file content is too large to write at once. Please use edit_file to make incremental changes to the existing file, or split the changes into smaller parts. Do NOT try to write the entire file again.'
                         }]
                     });
 
@@ -1062,6 +1065,12 @@ WORKSPACE: ${this.getWorkspacePath()}`,
             });
 
             req.on('error', (e) => reject(new Error(`Network error: ${e.message}`)));
+
+            // Set timeout for the request (120 seconds)
+            req.setTimeout(120000, () => {
+                req.destroy();
+                reject(new Error('Request timeout: API took too long to respond (120s)'));
+            });
 
             // Log request size for debugging
             console.log(`ClaudioAI: Sending request, body size: ${body.length} bytes`);
