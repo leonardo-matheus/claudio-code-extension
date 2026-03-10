@@ -177,6 +177,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 case 'setMode':
                     this._client.setMode(data.mode);
                     break;
+                case 'setModel':
+                    this._client.setModel(data.model);
+                    break;
                 case 'ready':
                     this._client.setMode({ autoEdit: true, planMode: false, bypass: false });
                     this.sendChatList();
@@ -453,7 +456,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .header-actions {
             display: flex;
             gap: 8px;
+            align-items: center;
         }
+
+        .model-select {
+            padding: 6px 10px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            outline: none;
+            max-width: 130px;
+        }
+        .model-select:hover { border-color: var(--accent); }
+        .model-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
 
         .btn {
             padding: 8px 14px;
@@ -1390,6 +1408,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <span class="logo-text">ClaudioAI</span>
         </div>
         <div class="header-actions">
+            <select class="model-select" id="modelSelect" title="Select model">
+                <option value="claude-opus-4-5">Claude Opus 4.5</option>
+                <option value="claude-sonnet-4">Claude Sonnet 4</option>
+                <option value="claude-haiku-3-5">Claude Haiku 3.5</option>
+            </select>
             <button class="btn btn-ghost" id="compactBtn" title="Compact history">🗜️</button>
             <button class="btn btn-primary" id="newChatBtn">+ New Chat</button>
         </div>
@@ -1489,6 +1512,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const tokenPercent = document.getElementById('tokenPercent');
         const stopBtn = document.getElementById('stopBtn');
         const queueBadge = document.getElementById('queueBadge');
+        const modelSelect = document.getElementById('modelSelect');
 
         let currentToolBlock = null;
         let busy = false;
@@ -1778,6 +1802,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         stopBtn?.addEventListener('click', () => {
             vscode.postMessage({ type: 'stopProcessing' });
+        });
+
+        modelSelect?.addEventListener('change', () => {
+            vscode.postMessage({ type: 'setModel', model: modelSelect.value });
         });
 
         function esc(str) {

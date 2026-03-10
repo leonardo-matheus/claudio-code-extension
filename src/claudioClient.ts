@@ -157,6 +157,7 @@ export class ClaudioClient {
 
     private cachedConfig: ApiConfig | null = null;
     private cachedWorkspacePath: string | null = null;
+    private selectedModel: string | null = null;
 
     private abortController: AbortController | null = null;
     private isProcessing = false;
@@ -194,6 +195,11 @@ export class ClaudioClient {
 
     getMode(): AgentMode {
         return this.mode;
+    }
+
+    setModel(model: string) {
+        this.selectedModel = model;
+        this.cachedConfig = null;
     }
 
     clearHistory() {
@@ -473,7 +479,7 @@ Provide a concise summary in 2-4 paragraphs:`;
         this.cachedConfig = {
             apiKey: userConfig.get<string>('apiKey') || bundledConfig?.apiKey || '',
             apiUrl: userConfig.get<string>('apiUrl') || bundledConfig?.apiUrl || 'https://claudioai.dev',
-            model: userConfig.get<string>('model') || bundledConfig?.model || 'claude-opus-4-5'
+            model: this.selectedModel || userConfig.get<string>('model') || bundledConfig?.model || 'claude-opus-4-5'
         };
         return this.cachedConfig;
     }
