@@ -576,6 +576,9 @@ ${summary}
                 }
 
                 case "read_file": {
+                    if (!params.path) {
+                        return { result: "Error: path is required", success: false };
+                    }
                     const filePath = path.join(workspacePath, params.path);
                     if (!fs.existsSync(filePath)) {
                         return { result: `File not found: ${params.path}`, success: false };
@@ -590,6 +593,14 @@ ${summary}
                 }
 
                 case "write_file": {
+                    if (!params.path) {
+                        return { result: "Error: path is required", success: false };
+                    }
+                    if (params.content === undefined || params.content === null) {
+                        return { result: "Error: content is required", success: false };
+                    }
+                    const content = String(params.content);
+
                     if (!this.mode.autoEdit && !this.mode.bypass) {
                         const allowed = await this.checkPermission("Write File", `Write to ${params.path}?`);
                         if (!allowed) return { result: "Permission denied by user", success: false };
@@ -599,16 +610,28 @@ ${summary}
                     if (!fs.existsSync(dir)) {
                         fs.mkdirSync(dir, { recursive: true });
                     }
-                    fs.writeFileSync(filePath, params.content, 'utf-8');
+                    fs.writeFileSync(filePath, content, 'utf-8');
 
                     // Open the file in editor
                     const doc = await vscode.workspace.openTextDocument(filePath);
                     await vscode.window.showTextDocument(doc);
 
-                    return { result: `✓ Written: ${params.path} (${params.content.split('\n').length} lines)`, success: true };
+                    return { result: `✓ Written: ${params.path} (${content.split('\n').length} lines)`, success: true };
                 }
 
                 case "edit_file": {
+                    if (!params.path) {
+                        return { result: "Error: path is required", success: false };
+                    }
+                    if (params.old_text === undefined || params.old_text === null) {
+                        return { result: "Error: old_text is required", success: false };
+                    }
+                    if (params.new_text === undefined || params.new_text === null) {
+                        return { result: "Error: new_text is required", success: false };
+                    }
+                    const oldText = String(params.old_text);
+                    const newText = String(params.new_text);
+
                     if (!this.mode.autoEdit && !this.mode.bypass) {
                         const allowed = await this.checkPermission("Edit File", `Edit ${params.path}?`);
                         if (!allowed) return { result: "Permission denied by user", success: false };
@@ -618,10 +641,10 @@ ${summary}
                         return { result: `File not found: ${params.path}`, success: false };
                     }
                     let content = fs.readFileSync(filePath, 'utf-8');
-                    if (!content.includes(params.old_text)) {
-                        return { result: `Text not found in file: "${params.old_text.substring(0, 50)}..."`, success: false };
+                    if (!content.includes(oldText)) {
+                        return { result: `Text not found in file: "${oldText.substring(0, 50)}..."`, success: false };
                     }
-                    content = content.replace(params.old_text, params.new_text);
+                    content = content.replace(oldText, newText);
                     fs.writeFileSync(filePath, content, 'utf-8');
 
                     // Open the file in editor
@@ -632,6 +655,10 @@ ${summary}
                 }
 
                 case "run_command": {
+                    if (!params.command) {
+                        return { result: "Error: command is required", success: false };
+                    }
+
                     if (!this.mode.bypass) {
                         const allowed = await this.checkPermission("Run Command", params.command);
                         if (!allowed) return { result: "Permission denied by user", success: false };
@@ -668,6 +695,9 @@ ${summary}
                 }
 
                 case "search_files": {
+                    if (!params.query) {
+                        return { result: "Error: query is required", success: false };
+                    }
                     const searchPath = path.join(workspacePath, params.path || "");
                     const results: string[] = [];
 
